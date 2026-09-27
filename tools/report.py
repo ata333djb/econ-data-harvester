@@ -57,7 +57,9 @@ from typing import Any, Optional, Sequence
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "python"))
 
-from econ_core import arbiter, credibility, http_client, source_profiler  # noqa: E402
+from econ_core import (  # noqa: E402
+    arbiter, credibility, http_client, series_key, source_profiler,
+)
 
 VALIDATED_DIR: Path = http_client.PROJECT_ROOT / "data" / "validated"
 PROCESSED_DIR: Path = http_client.PROJECT_ROOT / "data" / "processed"
@@ -123,30 +125,12 @@ def _rel(p: Path) -> str:
 
 
 def _canonical(key: str) -> str:
-    """把 alias / 自动推导键解析到规范键（知识库里没有就原样返回）。
+    """把 alias / 自动推导键解析到规范键。
 
-    需要处理大小写变体：normalize 自动推导出来的键是**大写**（NBS|...），
-    知识库里按大写存别名，但 data/processed 的信封里写的是小写 —— 不兼容的话
-    同一条 GDP 会被当成两条序列，行数就会重复计数。
+    实现已抽到 econ_core.series_key（tools/export.py 也用同一份，避免两边规则漂移）；
+    这里只留薄封装，因为模板与多处调用点都用 _canonical 这个名字。
     """
-    try:
-        return str(source_profiler.profile_series(key)["series_key"])
-    except KeyError:
-        pass
-    except Exception:  # noqa: BLE001 - 报告不能因为一条序列不在知识库就挂掉
-        return key
-    try:
-        indicators = source_profiler.load_knowledge().get("indicators") or {}
-    except Exception:  # noqa: BLE001
-        return key
-    low = key.lower()
-    for candidate in indicators:
-        if str(candidate).lower() == low:
-            try:
-                return str(source_profiler.profile_series(str(candidate))["series_key"])
-            except Exception:  # noqa: BLE001
-                break
-    return key
+    return series_key.canonical_key(key)
 
 
 # --------------------------------------------------------------------------- #
@@ -470,8 +454,11 @@ def build_lineage(series_key: str = LINEAGE_SERIES) -> dict[str, Any]:
     }
 
 
-def build_downloads() -> dict[str, Any]:
-    """页脚之前的三份产物清单（大小 + 更新时间，路径相对项目根）。"""
+def build_downloads(total_rows: int = 0) -> dict[str, Any]:
+    """页脚之前的三份产物清单（大小 + 更新时间，路径相对项目根）。
+
+    total_rows 是「去重后的观测数」，用来核对 CSV 行数是否与总览一致。
+    """
     items = [
         {"name": "econ_data.csv", "desc": "长表 CSV（utf-8-sig，Excel 可直接打开）"},
         {"name": "econ_data.db", "desc": "SQLite（observations 表 + series_summary 视图）"},
@@ -489,7 +476,7 @@ def build_downloads() -> dict[str, Any]:
             n_csv = sum(1 for _ in _csv.DictReader(fh))
     except OSError:
         n_csv = 0
-    return {"files": files, "csv_rows": n_csv}
+    return {"files": files, "csv_rows": n_csv, "total_rows": total_rows}
 
 
 def build_context() -> dict[str, Any]:
@@ -647,7 +634,7 @@ def build_context() -> dict[str, Any]:
             ],
         },
         "lineage": build_lineage(),
-        "downloads": build_downloads(),
+        "downloads": build_downloads(n_rows),
         "dim_names": [DIMENSION_CN[k] for k in DIMENSIONS],
     }
 
@@ -897,10 +884,15 @@ details summary { cursor:pointer; color:#1a73e8; font-size:12px; margin-top:4px;
       {% endfor %}
       </tbody>
     </table>
-    <p class="note"><strong>CSV 行数与总览不一致是正常的</strong>：CSV 现有 {{ downloads.csv_rows }} 行，
-      而「一、总览」说的 142 行是<strong>按序列去重后</strong>的观测数。export 层把 alias 副本
-      <span class="k">nbs|000000000000|db8e…</span>（与 nbs|gdp|cny_100m 是同一条 GDP 序列）也导出了一遍，
-      所以 CSV 多出 10 行。数据本身没错，但用 CSV 做统计前建议按 series_key 去重。</p>
+    {% if downloads.csv_rows != downloads.total_rows %}
+    <p class="note"><strong>警告：CSV 行数与总览不一致</strong>：CSV 有 {{ downloads.csv_rows }} 行，
+      而「一、总览」的去重观测数是 {{ downloads.total_rows }} 行。这说明同一条序列被导出了多次
+      （alias 副本未去重），做统计前请按 series_key 去重。</p>
+    {% else %}
+    <p class="hint">CSV 行数与「一、总览」一致（{{ downloads.csv_rows }} 行）：
+      <span class="k">export.py</span> 会按规范键去重，alias 副本
+      <span class="k">nbs|000000000000|db8e…</span>（与 nbs|gdp|cny_100m 是同一条序列）不会被重复导出。</p>
+    {% endif %}
   </section>
 
   <footer>

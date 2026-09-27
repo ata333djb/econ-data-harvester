@@ -26,6 +26,7 @@
 **规范化层**
 
 - python/econ_core/normalize.py —— 长表规范化层。统一 14 列 schema + row_sha16 行指纹；含四个入口：normalize_observations（NBS）、normalize_worldbank_observations、normalize_imf_observations、normalize_cpi_wide（后三个是第四阶段新增，用于把 IMF / CPI 宽表纳入统一入口）
+- python/econ_core/series_key.py —— series_key 规范化（别名解析 + 大小写变体）；export.py 与 report.py 共用的**去重依据**（**本轮新增**）
 
 **CLI 与 DSH 插件**
 
@@ -87,7 +88,7 @@
 ### 1.3 当前数据规模
 
 - **声明式序列数**：9 条（NBS 6 + World Bank 1 + IMF 2）。missing_report.json 里的 n_series=19 是**含重复**的：声明式 9 条 + 落盘扫描 10 条键，同一条序列被算两遍
-- **总行数**：142 行（9 条落盘序列的全部年份合计）。注意：早期写的 152 是**重复计数**——把 alias 副本 `nbs|000000000000|db8e...`（与 `nbs|gdp|cny_100m` 同一条序列）也加了一遍
+- **总行数**：142 行（9 条落盘序列的全部年份合计）。历史提醒：早期写的 152 是**重复计数**（alias 副本 `nbs|000000000000|db8e...` 与 `nbs|gdp|cny_100m` 是同一条序列，被算了两遍）。**export.py 现在按规范键去重**，所以 CSV / SQLite / 数据字典也都是一致口径
 - **缺失行数**：10 行（value 为 null / 空串 / NULL，**一个都没有填补**）
 - **缺失分类（按行统计）**：series_start 5 / discontinued 3 / not_yet_published 2 / true_gap **0**
 - **缺失动作（按行统计）**：leave_null 8 / wait 2 / interpolate 0
@@ -108,12 +109,12 @@
 9. imf|LUR（起点 2017）
 10. NBS|000000000000|db8e5a86c08246e79b1b11251927e740（**别名**，指向第 1 条）
 
-### 1.4 最近一轮新增（方向 D 第二轮：血缘与真实门禁状态）
+### 1.4 最近一轮新增（方向 D 第三轮：修 export 的 alias 重复）
 
-- tools/run-all-checks.py —— 结束时写 data/output/last_gate.json（成功失败都写，未跑的检查标 skip）
-- tools/report.py —— 新增「七、数据血缘」（nbs|gdp|cny_100m 五步链路）与「八、数据下载」两节；页脚读真实门禁状态；补生成时打 stderr 日志
-- 报告 39.6KB -> 45.4KB；**CSV 的 152 行与总览 142 行的差异已在报告内写明**（export 层重复导出 alias 副本，按 series_key 去重即可）
-- 上一轮修正的长期错误：总行数 152 是重复计数，去重后 142
+- 新增 python/econ_core/series_key.py —— canonical_key / is_alias_key（别名解析 + 大小写变体）；export.py 与 report.py 共用，不各写一份
+- tools/export.py —— 读 processed 时**按规范键去重**：保留知识库里没有 alias_of 的规范形式，丢弃 alias 副本并打印出来
+- 产物随之修正：CSV 152 -> **142** 行、SQLite observations 142、series_summary **9** 条、数据字典「总行数 142」
+- tools/report.py —— _canonical 改为委托 series_key（薄封装）；「数据下载」提示按实际行数判断，不再写死 142
 
 ---
 
@@ -414,7 +415,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 | scan-missing.py | 缺失扫描：声明式清单 + data/validated 落盘扫描，产出 missing_report.json（含两条已知断言） |
 | materialize-validated.py | 把声明式清单落盘 data/validated/（复用 scan-missing 的清单，不复制） |
 | run-fill-strategy.py | 一键 validated -> processed；内置 raw 缓存快照对比证明脱网 |
-| export.py | 输出层：processed -> CSV（utf-8-sig）+ SQLite（表/索引/视图）+ Markdown 数据字典 |
+| export.py | 输出层：processed -> CSV（utf-8-sig）+ SQLite（表/索引/视图）+ Markdown 数据字典；按规范键去重 alias 副本 |
 | report.py | 展示层：5 份 JSON -> 单文件 HTML 质量报告（Plotly 走 CDN）+ 7 项自检 |
 
 ### 6.3 src/plugins/ 与 .dsh/ —— 会话装配

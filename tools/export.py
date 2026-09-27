@@ -8,6 +8,12 @@ data/processed/**/*.json（由 tools/run-fill-strategy.py 产出），信封结�
 
     {"rows": [...], "missing_report": {...}, "decisions": [...], "processed_at": "..."}
 
+**按规范键去重**：同一条序列可能有多个 processed 文件——声明式规范键一份、
+normalize 自动推导的 alias 键一份（例如 `nbs|gdp|cny_100m` 与
+`NBS|000000000000|db8e...`，后者在知识库里带 alias_of）。本工具用
+`econ_core.series_key.canonical_key()` 归一化后只保留**规范形式**的那一份，
+alias 副本丢弃并打印出来；否则 CSV 会多出行、序列数会虚高。
+
 输出
 ----
 1. `data/output/econ_data.csv`     统一长表（所有序列所有行）
@@ -43,6 +49,11 @@ from pathlib import Path
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(PROJECT_ROOT / "python"))
+
+from econ_core.series_key import canonical_key, is_alias_key  # noqa: E402
+
 PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 OUT_DIR = PROJECT_ROOT / "data" / "output"
 
@@ -67,11 +78,22 @@ _RAW_FIELD_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _load_processed() -> list[dict[str, Any]]:
-    """读 data/processed/ 下所有 processed 信封。"""
-    out: list[dict[str, Any]] = []
+def _envelope_key(obj: dict[str, Any]) -> str:
+    """信封里记的 series_key（缺失时给 "?"）。"""
+    return str((obj.get("missing_report") or {}).get("series_key") or "?")
+
+
+def _load_processed() -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """读 data/processed/ 下所有 processed 信封，并按**规范键**去重。
+
+    同一条序列可能有多个文件（规范键一份 + alias 键一份）。保留「键本身就是规范形式」
+    的那份（即 is_alias_key 为 False），丢弃 alias 副本，并把丢弃的记进第二个返回值。
+    归一化规则与 tools/report.py 共用 econ_core.series_key，不重复实现。
+    """
+    kept: dict[str, dict[str, Any]] = {}
+    dropped: list[dict[str, str]] = []
     if not PROCESSED_DIR.is_dir():
-        return out
+        return [], []
     for f in sorted(PROCESSED_DIR.rglob("*.json")):
         try:
             obj = json.loads(f.read_text(encoding="utf-8"))
@@ -80,9 +102,23 @@ def _load_processed() -> list[dict[str, Any]]:
             continue
         if not isinstance(obj, dict) or not isinstance(obj.get("rows"), list):
             continue
-        obj["_file"] = str(f.relative_to(PROJECT_ROOT))
-        out.append(obj)
-    return out
+        rel = str(f.relative_to(PROJECT_ROOT))
+        obj["_file"] = rel
+        raw_key = _envelope_key(obj)
+        canon = canonical_key(raw_key)
+        prev = kept.get(canon)
+        if prev is None:
+            kept[canon] = obj
+            continue
+        if is_alias_key(_envelope_key(prev)) and not is_alias_key(raw_key):
+            dropped.append({"file": str(prev.get("_file") or ""),
+                            "series_key": _envelope_key(prev),
+                            "kept": raw_key})
+            kept[canon] = obj
+        else:
+            dropped.append({"file": rel, "series_key": raw_key,
+                            "kept": _envelope_key(prev)})
+    return list(kept.values()), dropped
 
 
 def _raw_fields(row: dict[str, Any]) -> dict[str, Any]:
@@ -272,9 +308,13 @@ def main() -> int:
     print("export: data/processed -> CSV + SQLite + Markdown 数据字典")
     print("=" * 96)
 
-    envelopes = _load_processed()
+    envelopes, dropped = _load_processed()
     recs = _records(envelopes)
-    print(f"\n  processed 文件数: {len(envelopes)}")
+    n_files = len(list(PROCESSED_DIR.rglob("*.json"))) if PROCESSED_DIR.is_dir() else 0
+    print(f"\n  processed 文件数: {n_files}"
+          + (f"（去重后 {len(envelopes)}，丢弃 alias 副本 {len(dropped)}）" if dropped else ""))
+    for d in dropped:
+        print(f"      丢弃 {d['file']}：series_key={d['series_key']} 与 {d['kept']} 是同一条序列")
     print(f"  展平后行数      : {len(recs)}")
     n_missing = sum(1 for r in recs if r.get("value") is None)
     print(f"  其中缺失行      : {n_missing}（value 为空/NULL，保留不丢）")
