@@ -27,6 +27,7 @@
 8. python tools/compare-gdp-3way.py                    （NBS vs WB vs IMF 三方交叉验证）
 9. python tools/compare-gdp-real.py                    （NBS vs IMF 实际增速，无汇率污染）
 10. python tools/compare-unemployment.py               （失业率三方：登记/调查 vs IMF LUR）
+11. python tools/scan-missing.py                       （缺失检测与分类，不填补）
 
 约定
 ----
@@ -100,9 +101,14 @@ CHECKS: list[Check] = [
     Check("cross_validation --test", "python",
           ["-m", "econ_core.cross_validation", "--test"]),
     Check("compare-gdp", "python", ["tools/compare-gdp.py"]),
-    Check("compare-gdp-3way", "python", ["tools/compare-gdp-3way.py"]),
+    # 同 check-cli-envelope：3way 要跑 NBS + 3 次 WB（含 18MB 全量目录）+ IMF，
+    # 实测 16.5s~85.1s（5 倍波动），一次重试风暴可到 ~247s，故同样放宽到 420s。
+    Check("compare-gdp-3way", "python", ["tools/compare-gdp-3way.py"], timeout_s=420),
     Check("compare-gdp-real", "python", ["tools/compare-gdp-real.py"]),
     Check("compare-unemployment", "python", ["tools/compare-unemployment.py"]),
+    # scan-missing 要跑 NBS 4 次 + WB 2 次 + IMF 2 次 + 默认指标 CPI，也是网络密集型
+    # （实测出现过 TimeoutError 重试），与另两项同理放宽到 420s。
+    Check("scan-missing", "python", ["tools/scan-missing.py"], timeout_s=420),
 ]
 
 # --------------------------------------------------------------------------- #
