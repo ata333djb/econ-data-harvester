@@ -171,6 +171,21 @@ def _section(title: str, body: str) -> None:
     print(body.rstrip("\n") if body.strip() else "(空)")
 
 
+def _quote_arg(arg: str) -> str:
+    """含空格的 argv 元素用双引号包起来。
+
+    实测 `shutil.which("node")` 在本机解析到 `D:/New Folder/node.EXE`（Windows 绝对
+    路径，含空格）；不引号的话，失败块里打印出来的命令复制粘贴执行会失败。
+    这里自拼引号，不引 shell 转义库。
+    """
+    return f'"{arg}"' if (" " in arg or "\t" in arg) else arg
+
+
+def _format_argv(argv: list[str]) -> str:
+    """把 argv 渲染成可直接粘贴执行的一行。"""
+    return " ".join(_quote_arg(a) for a in argv)
+
+
 # --------------------------------------------------------------------------- #
 # 主流程
 # --------------------------------------------------------------------------- #
@@ -204,7 +219,7 @@ def main() -> int:
         print()
         print("-" * 72)
         print(f"FAILED  {check.name}")
-        print(f"命令    {' '.join(argv) if argv else '(未执行)'}")
+        print(f"命令    {_format_argv(argv) if argv else '(未执行)'}")
         print(f"原因    {result.note or f'exit code = {result.exit_code}'}")
         print("-" * 72)
         _section("stdout", result.stdout)

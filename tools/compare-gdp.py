@@ -206,6 +206,15 @@ def main() -> int:
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print()
     print(f"[saved] {out}")
+
+    # 门禁只看退出码，"没崩"不等于"验证通过"，所以这里必须自己给出硬边界。
+    # 刻意**不**要求 verdict == "可直接拼接"：接入 IMF 等第三个源后差异率可能落在
+    # 1~3%（判为"可接受"），那也应该算通过。硬边界只取两条：重叠期不足、或判定"不可拼接"。
+    summary = result["summary"]
+    if summary["n_common"] < 10 or summary["verdict"] == "不可拼接":
+        print(f"[FAIL] 交叉验证未通过: {summary}", file=sys.stderr)
+        return 1
+
     return 0
 
 
