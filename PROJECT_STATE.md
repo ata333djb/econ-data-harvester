@@ -109,12 +109,12 @@
 9. imf|LUR（起点 2017）
 10. NBS|000000000000|db8e5a86c08246e79b1b11251927e740（**别名**，指向第 1 条）
 
-### 1.4 最近一轮新增（方向 D 第三轮：修 export 的 alias 重复）
+### 1.4 最近一轮新增（方向 D 第四轮：图表内联）
 
-- 新增 python/econ_core/series_key.py —— canonical_key / is_alias_key（别名解析 + 大小写变体）；export.py 与 report.py 共用，不各写一份
-- tools/export.py —— 读 processed 时**按规范键去重**：保留知识库里没有 alias_of 的规范形式，丢弃 alias 副本并打印出来
-- 产物随之修正：CSV 152 -> **142** 行、SQLite observations 142、series_summary **9** 条、数据字典「总行数 142」
-- tools/report.py —— _canonical 改为委托 series_key（薄封装）；「数据下载」提示按实际行数判断，不再写死 142
+- tools/report.py —— Plotly 2.27.0 **内联**进 HTML（首次联网拉一次落 raw 缓存，之后离线复用）；新增 `--offline`（无缓存即报错，不联网）
+- 报告 46KB -> **3.6MB**，从此**断网双击也能看**（这是「发给同事就能用」的最后一个硬缺口）
+- 自检第 1 项阈值 30KB -> 3MB；第 3 项改为「无外部 script 引用 + 有内联标记」
+- 注意：Plotly bundle 自己内部含 1 处字符串 cdn.plot.ly（topojsonURL 默认值），不是外部引用
 
 ---
 
@@ -377,11 +377,11 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 ### 5.3 方向 D 与之后的待办
 
-- **方向 D 第一轮：HTML 质量报告 —— 已完成（本轮）**：tools/report.py -> data/output/report.html（8 节：总览 / 可信度排名 / 雷达图 / 口径分歧 / 缺失分布 / 许可证 / 页脚）
-- **方向 D 后续（可选）**：图表内联（去掉 Plotly CDN 依赖）/ 导出 PDF / 把报告挂到 CI
-- **方向 A 第四轮（可选）**：拼接断点检查 / PROV-JSON 溯源导出 —— 还没开始，优先级待定
-- **产品化**：桌面版 preset（家目录已同步三套 adapter，需要确认桌面版实际加载的是哪一份）
-- **加源**：OECD / BIS / FRED。每加一条序列**必须补知识库条目**，否则 profiler 抛 KeyError
+- **方向 D 已完成四轮**：① HTML 质量报告（8 节）② 数据血缘 + 真实门禁状态 ③ 修 export 的 alias 重复 ④ **图表内联（报告自包含，断网可看）**
+- **方向 D 后续（可选）**：导出 PDF / 把报告挂到 CI（CI 用 `report.py --test --offline` 可复现，但要**先预热缓存**：冷检出没有 raw 存档，首次仍得联网拉一次 Plotly；门禁本身仍用不带 --offline 的 `report.py --test`）
+- **方向 A 第四轮（可选）**：拼接断点检查 / PROV-JSON 溯源导出 —— 还没开始；注意系统至今**从未真正拼接**过序列，断点检查暂时没有对象
+- **方向 C（下一轮主线）**：横向加源，范围锁定「一个源 + 一个指标」——把 **CPI** 接进交叉验证（当前 3 条 CPI 序列零验证，占落盘序列的 1/3）
+- **方向 B（已暂停，需单独立项）**：桌面版装配链路。实测本会话真正生效的是 .dsh/econ-harvester.patch.yml 的 global insert，不是 preset 的 persona；共有三层注册机制、两份 preset 副本
 - **落地插值**：当前 true_gap = 0 例，所以插值实现故意留空（出现 interpolate 会抛 NotImplementedError）。等真遇到上游序列中断再实现，并同步补回归
 
 ### 5.4 已知的小尾巴

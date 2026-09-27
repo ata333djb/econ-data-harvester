@@ -15,7 +15,7 @@
       data/processed/*/*.json                处理后数据（行数、缺失年份）
       python/econ_core/source_profiles.yaml  许可证信息
 
-    输出：data/output/report.html（单文件；除 Plotly CDN 外自包含）
+    输出：data/output/report.html（**完全自包含**：Plotly 内联在文件里，断网双击也能看）
 
 报告结构
 --------
@@ -34,14 +34,17 @@
 * 缺失值一律渲染成「—」，HTML 里不出现 None 字面量（自检第 6 项会查）。
 * arbiter / credibility 的报告目录**不存在时本工具会补生成**（它们不在门禁链上，
   干净检出时没人跑 --write；否则报告会缺两大块）。已存在就只读，不覆盖。
-* 门禁状态：本工具找一个约定路径 data/output/last_gate.json，没有就写 unknown ——
-  门禁目前不落盘这种文件，所以正常会显示 unknown。
-* 图表库走 CDN（打开报告需要联网）；其余 HTML/CSS/数据全部内联。
+* 门禁状态：读 data/output/last_gate.json（run-all-checks.py 结束时写）。注意同一次门禁跑
+  出来的报告读到的是**上一次**的结果，所以页脚会连 ran_at 一起显示；文件不存在才写 unknown。
+* 图表库（Plotly 固定版本）**内联**进 HTML：首次生成联网拉一次并落 raw 缓存
+  （data/raw/_http_cache/<key>.js，解压后的副本），之后离线复用；--offline 时本地没有缓存
+  就直接报错，不联网。
 
 用法
 ----
     ./.venv/Scripts/python.exe tools/report.py            # 生成报告
     ./.venv/Scripts/python.exe tools/report.py --test     # 生成 + 7 项自检
+    ./.venv/Scripts/python.exe tools/report.py --offline  # 禁止联网（CI 可复现）
 """
 
 from __future__ import annotations
@@ -71,7 +74,12 @@ GATE_STATUS_PATH: Path = http_client.PROJECT_ROOT / "data" / "output" / "last_ga
 
 GENERATOR = "tools/report.py v1（方向 D 第一轮）"
 TITLE = "EconDataHarvester 数据质量报告"
-PLOTLY_CDN = "https://cdn.plot.ly/plotly-2.27.0.min.js"
+
+#: Plotly 版本与 URL 固定（升级时改这两行；raw 缓存的键含 URL，旧版本会自然失效）
+PLOTLY_VERSION = "2.27.0"
+PLOTLY_URL = "https://cdn.plot.ly/plotly-2.27.0.min.js"
+#: 内联成功的标记（Plotly bundle 头部 banner）
+PLOTLY_BANNER = f"plotly.js v{PLOTLY_VERSION}"
 
 #: 判定 -> 颜色（同口径绿 / 可桥接黄 / 不可拼接红 / 人工复核灰）
 VERDICT_COLOR = {
@@ -105,6 +113,10 @@ DIMENSION_CN = {
 LICENSE_USE_CN = {"yes": "可", "no": "不可", "unknown": "未标注（需自行核实）"}
 
 
+class ReportError(RuntimeError):
+    """报告层可预期的失败（比如 --offline 但本地没有 Plotly 缓存）。"""
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -136,6 +148,62 @@ def _canonical(key: str) -> str:
 # --------------------------------------------------------------------------- #
 # 输入：确保四份派生报告存在（它们不在门禁链上）
 # --------------------------------------------------------------------------- #
+
+_PLOTLY_CACHE: Optional[tuple[str, str]] = None
+
+
+def _plotly_plain_path() -> Path:
+    """内联用 Plotly JS 的本地副本路径。
+
+    raw 存档存的是**原始响应字节**（这个 URL 是 gzip 的），不能直接按文本读；
+    所以在存档旁边落一份解压后的 .js，离线时直接读它。
+    """
+    bin_path, _meta = http_client.cache_path_for(PLOTLY_URL)
+    return bin_path.with_suffix(".js")
+
+
+def load_plotly_js(offline: bool = False) -> tuple[str, str]:
+    """取 Plotly JS 文本，返回 (js, 来源说明)。
+
+    顺序：解压后的本地副本 -> raw 存档（就地解压并落一份副本）-> 联网拉取。
+    联网走 http_client，所以**拉一次就落 raw 缓存**；offline=True 时禁止联网，
+    本地没有就直接报错（CI 用这个保证可复现）。
+    """
+    global _PLOTLY_CACHE
+    if _PLOTLY_CACHE is not None:
+        return _PLOTLY_CACHE
+
+    plain = _plotly_plain_path()
+    if plain.is_file() and plain.stat().st_size > 100_000:
+        _PLOTLY_CACHE = (plain.read_text(encoding="utf-8"), f"本地副本 {_rel(plain)}")
+        return _PLOTLY_CACHE
+
+    bin_path, _meta = http_client.cache_path_for(PLOTLY_URL)
+    if bin_path.is_file():
+        import gzip
+        raw = bin_path.read_bytes()
+        try:
+            data = gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw
+            plain.write_bytes(data)
+            _PLOTLY_CACHE = (data.decode("utf-8"),
+                             f"raw 存档 {_rel(bin_path)}（就地解压并落下本地副本）")
+            return _PLOTLY_CACHE
+        except (OSError, UnicodeDecodeError) as exc:
+            print(f"[plotly] raw 存档解压失败（{exc}），改为联网拉取", file=sys.stderr)
+
+    if offline:
+        raise ReportError(
+            f"--offline：本地没有 Plotly {PLOTLY_VERSION} 的缓存（{_rel(plain)} 与 "
+            f"raw 存档都不存在）。先联网跑一次 tools/report.py 落缓存。")
+
+    print(f"[plotly] 首次拉取 {PLOTLY_URL}（约 3.6MB，之后走本地缓存）", file=sys.stderr)
+    resp = http_client.get_bytes(PLOTLY_URL)
+    data = bytes(resp.content)
+    plain.write_bytes(data)
+    _PLOTLY_CACHE = (data.decode("utf-8"),
+                     f"本次联网拉取（已落 raw 存档 {_rel(bin_path)}）")
+    return _PLOTLY_CACHE
+
 
 def ensure_inputs() -> list[str]:
     """检查 arbiter / credibility 报告目录；缺失就补生成（并在 stderr 留一行日志）。"""
@@ -479,8 +547,10 @@ def build_downloads(total_rows: int = 0) -> dict[str, Any]:
     return {"files": files, "csv_rows": n_csv, "total_rows": total_rows}
 
 
-def build_context() -> dict[str, Any]:
+def build_context(offline: bool = False) -> dict[str, Any]:
     """读全部输入，算出模板要用的所有数字与行。"""
+    plotly_js, plotly_source = load_plotly_js(offline)
+
     series = load_series()
     creds = load_credibility()
     pairs = load_arbiter_pairs()
@@ -607,7 +677,9 @@ def build_context() -> dict[str, Any]:
         "title": TITLE,
         "generated_at": _utc_now(),
         "generator": GENERATOR,
-        "plotly_cdn": PLOTLY_CDN,
+        "plotly_js": plotly_js,
+        "plotly_version": PLOTLY_VERSION,
+        "plotly_source": plotly_source,
         "window": window,
         "n_series": len(series),
         "cards": cards,
@@ -646,7 +718,9 @@ TEMPLATE = """
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ title }}</title>
-<script src="{{ plotly_cdn }}"></script>
+<script>
+{{ plotly_js | safe }}
+</script>
 <style>
 :root { --ink:#202124; --muted:#5f6368; --line:#dadce0; --bg:#f6f8fa; --card:#fff; }
 * { box-sizing: border-box; }
@@ -902,7 +976,7 @@ details summary { cursor:pointer; color:#1a73e8; font-size:12px; margin-top:4px;
     <ul>
       {% for f in footer.inputs %}<li class="k">{{ f }}</li>{% endfor %}
     </ul>
-    <div class="k" style="margin-top:8px">图表由 Plotly 渲染（CDN：{{ plotly_cdn }}），打开本页需要联网。</div>
+    <div class="k" style="margin-top:8px">图表由 Plotly {{ plotly_version }} 渲染，库已内联在本文件里（来源：{{ plotly_source }}）——断网双击也能看。</div>
   </footer>
 </div>
 
@@ -961,10 +1035,10 @@ def render_html(ctx: dict[str, Any]) -> str:
     return env.from_string(TEMPLATE).render(**ctx)
 
 
-def build(out_path: Optional[Path] = None) -> Path:
+def build(out_path: Optional[Path] = None, offline: bool = False) -> Path:
     """生成报告，返回输出路径。"""
     ensure_inputs()
-    ctx = build_context()
+    ctx = build_context(offline)
     out = Path(out_path) if out_path else OUTPUT_PATH
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render_html(ctx), encoding="utf-8")
@@ -975,7 +1049,7 @@ def build(out_path: Optional[Path] = None) -> Path:
 # 自检
 # --------------------------------------------------------------------------- #
 
-MIN_BYTES = 30 * 1024
+MIN_BYTES = 3 * 1024 * 1024   # 内联 Plotly 之后约 3.6MB；低于 3MB 说明内联没生效
 
 
 class _Probe(HTMLParser):
@@ -1011,11 +1085,11 @@ def _selftest() -> int:
     # 1) 文件存在 + 大小
     print()
     print("-" * 92)
-    print(f"[1] 文件存在且 > 30KB：{size} bytes（阈值 {MIN_BYTES}）")
+    print(f"[1] 文件存在且 > 3MB（内联 Plotly 后）：{size:,} bytes（阈值 {MIN_BYTES:,}）")
     if not out.is_file():
         failures.append(f"1: 文件不存在 {out}")
     elif size <= MIN_BYTES:
-        failures.append(f"1: 文件只有 {size} bytes，期望 > {MIN_BYTES}")
+        failures.append(f"1: 文件只有 {size:,} bytes，期望 > {MIN_BYTES:,}（内联没生效？）")
 
     # 2) 标题
     print()
@@ -1024,12 +1098,21 @@ def _selftest() -> int:
     if TITLE not in text:
         failures.append("2: 缺少标题")
 
-    # 3) Plotly CDN
+    # 3) 图表库已内联、无外部引用（--offline 也要能出图）
+    n_ext = text.count('<script src="http')
+    n_internal = text.count("cdn.plot.ly")
     print()
     print("-" * 92)
-    print(f"[3] 含 Plotly CDN 引用：{PLOTLY_CDN}")
-    if PLOTLY_CDN not in text:
-        failures.append("3: 缺少 Plotly CDN 引用")
+    print("[3] 图表库内联、无外部 CDN 引用")
+    print(f"    外部 <script src=\"http...>  : {n_ext} 处（应为 0）")
+    print(f"    内联标记 {PLOTLY_BANNER!r} : {"有" if PLOTLY_BANNER in text else "无"}")
+    print(f"    HTML 里 \"cdn.plot.ly\" 出现 {n_internal} 处"
+          + ("（全部来自 Plotly bundle 内部的 topojsonURL 默认值，不是外部引用）"
+             if n_internal else ""))
+    if n_ext:
+        failures.append(f"3: 仍有 {n_ext} 处外部 <script src=\"http...>，内联没生效")
+    if PLOTLY_BANNER not in text:
+        failures.append(f"3: 没有找到内联标记 {PLOTLY_BANNER!r}")
 
     # 4) 交叉验证对数
     n_pair_html = text.count('data-cv-pair="')
@@ -1097,13 +1180,15 @@ def _main(argv: Optional[Sequence[str]] = None) -> int:
                                 description="把 5 份 JSON 报告合成单文件 HTML 质量报告")
     p.add_argument("--test", action="store_true", help="生成报告并跑 7 项自检")
     p.add_argument("--out", default=None, help="输出路径（默认 data/output/report.html）")
+    p.add_argument("--offline", action="store_true",
+                   help="禁止联网：本地没有 Plotly 缓存就直接报错（CI 可复现用）")
     a = p.parse_args(argv)
 
     if a.test:
         return _selftest()
     try:
-        out = build(a.out)
-    except RuntimeError as exc:
+        out = build(a.out, offline=a.offline)
+    except (RuntimeError, ReportError) as exc:
         print(f"[report] {exc}", file=sys.stderr)
         return 2
     print(f"已生成: {_rel(out)}（{out.stat().st_size} bytes）")
