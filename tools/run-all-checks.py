@@ -21,13 +21,15 @@
 2. node tools/smoke-worldbank-adapter.mjs              （插件 argv 拼装，桩）
 3. node tools/smoke-imf-adapter.mjs                    （插件 argv 拼装，桩）
 4. python tools/check-cli-envelope.py                  （真跑 CLI 的信封契约）
-5. python -m econ_core.normalize --test                （规范化层自检）
-6. python -m econ_core.cross_validation --test         （交叉验证自检）
-7. python tools/compare-gdp.py                         （NBS vs World Bank 端到端）
-8. python tools/compare-gdp-3way.py                    （NBS vs WB vs IMF 三方交叉验证）
-9. python tools/compare-gdp-real.py                    （NBS vs IMF 实际增速，无汇率污染）
-10. python tools/compare-unemployment.py               （失业率三方：登记/调查 vs IMF LUR）
-11. python tools/scan-missing.py                       （缺失检测与分类，不填补）
+5. python -m econ_core.missing --test                  （缺失分类自检，纯离线 0.1s）
+6. python -m econ_core.normalize --test                （规范化层自检）
+7. python -m econ_core.cross_validation --test         （交叉验证自检）
+8. python tools/compare-gdp.py                         （NBS vs World Bank 端到端）
+9. python tools/compare-gdp-3way.py                    （NBS vs WB vs IMF 三方交叉验证）
+10. python tools/compare-gdp-real.py                    （NBS vs IMF 实际增速，无汇率污染）
+11. python tools/compare-unemployment.py               （失业率三方：登记/调查 vs IMF LUR）
+12. python tools/scan-missing.py                       （缺失检测与分类）
+13. python tools/run-fill-strategy.py                  （填补策略执行器：只 leave_null/wait）
 
 约定
 ----
@@ -97,6 +99,8 @@ CHECKS: list[Check] = [
     # check-cli-envelope 要真跑 13 次网络调用（NBS 4 + WB 3 含 18MB 全量目录 + IMF 3 各约 12s），
     # 实测 48.6s；单个慢调用叠加 http_client 的 4 次重试可到 ~247s，故单独放宽到 420s。
     Check("check-cli-envelope", "python", ["tools/check-cli-envelope.py"], timeout_s=420),
+    # missing --test 是纯离线自检（0.1s），覆盖四种缺失分类，最便宜的门禁项，放前面
+    Check("missing --test", "python", ["-m", "econ_core.missing", "--test"]),
     Check("normalize --test", "python", ["-m", "econ_core.normalize", "--test"]),
     Check("cross_validation --test", "python",
           ["-m", "econ_core.cross_validation", "--test"]),
@@ -109,6 +113,9 @@ CHECKS: list[Check] = [
     # scan-missing 要跑 NBS 4 次 + WB 2 次 + IMF 2 次 + 默认指标 CPI，也是网络密集型
     # （实测出现过 TimeoutError 重试），与另两项同理放宽到 420s。
     Check("scan-missing", "python", ["tools/scan-missing.py"], timeout_s=420),
+    # run-fill-strategy 复用 scan-missing 的声明式清单（要现取 NBS/WB/IMF 数据），
+    # 同样是网络密集型，故一并给 420s。
+    Check("run-fill-strategy", "python", ["tools/run-fill-strategy.py"], timeout_s=420),
 ]
 
 # --------------------------------------------------------------------------- #
