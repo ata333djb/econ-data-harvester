@@ -143,7 +143,7 @@ def main() -> int:
     print(f"  series_b（晚源）NBS  : {nbs_info['n_rows']:>3} 年")
     print(f"        {nbs_info['transform']}")
 
-    print(f"\n[2] 拼接（strategy={STRATEGY}）")
+    print(f"\n[2] 拼接（strategy={STRATEGY}，rebase=none 基线）")
     res = splicer.splice(bis_rows, nbs_rows, strategy=STRATEGY)
     ov, sm = res["overlap"], res["summary"]
     print(f"  并集期数 : {sm['n_total']}（{res['spliced'][0]['period']} ~ {res['spliced'][-1]['period']}）")
@@ -206,11 +206,84 @@ def main() -> int:
         "overlap": ov,
         "splice_point": res["splice_point"],
         "breaks": res["breaks"],
+        "rebase": res["rebase"],
         "summary": sm,
         "spliced": res["spliced"],
     }
     OUT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n  [saved] {OUT_PATH.relative_to(PROJECT_ROOT)}")
+
+    # ------------------------------------------------------------------ #
+    # [7] 三次拼接对比：none / ratio / difference（方向 C 第五轮）
+    # ------------------------------------------------------------------ #
+    print("\n" + "=" * 100)
+    print("[7] rebase 三模式对比（none 基线 / ratio / difference）")
+    print("=" * 100)
+    print("  前置诊断已确认：本用例的「需桥接」由 **trend_break** 触发，而 rebase 只调水平、")
+    print("  改不了斜率 —— 所以预期三种模式的 verdict **完全相同**。下面的数字是对该预期的实测。")
+
+    runs: dict[str, dict[str, Any]] = {}
+    for mode in ("none", "ratio", "difference"):
+        runs[mode] = splicer.splice(bis_rows, nbs_rows, strategy=STRATEGY, rebase=mode)
+
+    print(f"\n  {'模式':<12} {'verdict':<20} {'before':<14} {'factor':>10} {'offset':>10} "
+          f"{'sanity':>7} {'applied':>8} {'effect':>12}")
+    for mode in ("none", "ratio", "difference"):
+        r = runs[mode]
+        s = r["summary"]
+        rb = r["rebase"]
+        fac = f"{rb['factor']:.6f}" if (rb and rb["factor"] is not None) else "-"
+        off = f"{rb['offset']:+.6f}" if (rb and rb["offset"] is not None) else "-"
+        san = rb["sanity_check"] if rb else "-"
+        app = str(rb["applied"]) if rb else "-"
+        eff = rb["verdict_effect"] if rb else "-"
+        print(f"  {mode:<12} {s['verdict']:<20} {s['verdict_before_rebase']:<14} "
+              f"{fac:>10} {off:>10} {san:>7} {app:>8} {eff:>12}")
+
+    print("\n  各模式的断点（调整后）：")
+    for mode in ("none", "ratio", "difference"):
+        r = runs[mode]
+        brs = "、".join(f"{b['type']}={b['verdict']}" for b in r["breaks"])
+        print(f"    {mode:<12} {brs}")
+
+    # ⚠️ 关键限定：本用例里 **rebase 根本没被执行**（applied=False）。
+    #
+    # NBS（series_b）的跨度 2015~2025 **完全落在** BIS（series_a）的 1996~2025 之内，
+    # 所以 B 的每一期都是重叠期 -> 没有非重叠期可调 -> splice() 判定无需执行。
+    # 两个后果必须说清：
+    #   ① 上面那张三模式表**不能**用作"rebase 修不了 trend_break"的证据 —— 它只证明"没跑"；
+    #   ② 它也确实**无法**被修好：触发项是 trend_break（斜率），rebase 只动水平。
+    #      rebase 的落点是 B 的非重叠期，而接缝两侧永远是「A 的接缝前一期」与
+    #      「B 的重叠期值」—— 后者按 strategy 直接选原文，不受调整影响。
+    r_probe = runs["ratio"]
+    print(f"\n  ⚠️ 限定条件：applied={r_probe['rebase']['applied']}（{r_probe['rebase']['mode']}）")
+    print(f"     原因 = {r_probe['rebase'].get('not_applied_reason')}")
+    print("     结论分两层，别混：")
+    print("       (a) 对这个数据形状，rebase 是**空操作** —— NBS 被 BIS 的时间跨度完全包住，")
+    print("           没有非重叠期可调。所以三模式 verdict 相同**不能**当作 rebase 无效的证据。")
+    print("       (b) 但 trend_break 本身 rebase 也修不了：它只调水平，不改变斜率。")
+    print("           splice() 的断点检测里 trend_break 与 level_jump 是独立两项，")
+    print("           rebase 只可能影响 level_jump（而这里 level_jump 本来就 ok）。")
+    print("     真正验证「rebase 能修水平台阶」的是 splicer --test 的场景 [9]/[10]（合成数据）。")
+
+    # 三个产物各落一份（none 的那份与上面 OUT_PATH 内容一致，但文件名按需求单列）
+    for mode in ("none", "ratio", "difference"):
+        r = runs[mode]
+        p = OUT_DIR / f"cpi_bis_nbs_{mode}.json"
+        obj = {
+            "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "basis": (f"BIS WS_LONG_CPI M.CN.771（月度同比 -> 年均值）⊗ NBS 全国 CPI"
+                      f"（上年=100 -100），strategy={STRATEGY}，rebase={mode}"),
+            "sources": {"series_a": bis_info, "series_b": nbs_info},
+            "overlap": r["overlap"],
+            "splice_point": r["splice_point"],
+            "breaks": r["breaks"],
+            "rebase": r["rebase"],
+            "summary": r["summary"],
+            "spliced": r["spliced"],
+        }
+        p.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"  [saved] {p.relative_to(PROJECT_ROOT)}")
 
     print("\n" + "=" * 100)
     print(f"拼接完成：{sm['n_total']} 期，verdict={sm['verdict']}，"
