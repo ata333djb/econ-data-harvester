@@ -21,23 +21,24 @@
 2. node tools/smoke-worldbank-adapter.mjs              （插件 argv 拼装，桩）
 3. node tools/smoke-imf-adapter.mjs                    （插件 argv 拼装，桩）
 4. node tools/smoke-fred-adapter.mjs                   （插件 argv 拼装，桩）
-5. python tools/check-cli-envelope.py                  （真跑 CLI 的信封契约）
-6. python -m econ_core.missing --test                  （缺失分类自检，纯离线 0.1s）
-7. python -m econ_core.source_profiler --test          （来源画像自检，纯离线 0.2s）
-8. python -m econ_core.arbiter --test                  （口径判定自检，纯离线 0.3s）
-9. python -m econ_core.normalize --test                （规范化层自检）
-10. python -m econ_core.cross_validation --test         （交叉验证自检）
-11. python tools/compare-gdp.py                         （NBS vs World Bank 端到端）
-12. python tools/compare-gdp-3way.py                    （NBS vs WB vs IMF 三方交叉验证）
-13. python tools/compare-gdp-real.py                    （NBS vs IMF 实际增速，无汇率污染）
-14. python tools/compare-unemployment.py               （失业率三方：登记/调查 vs IMF LUR）
-15. python tools/compare-cpi.py                        （CPI 交叉验证：NBS vs FRED/OECD）
-16. python tools/scan-missing.py                       （缺失检测与分类）
-17. python tools/materialize-validated.py              （声明式清单落盘 validated）
-18. python tools/run-fill-strategy.py                  （填补策略执行器：只 leave_null/wait）
-19. python -m econ_core.credibility --test             （可信度评分自检，纯离线 0.5s）
-20. python tools/export.py                             （导出 CSV + SQLite + 数据字典）
-21. python tools/report.py --test                      （单文件 HTML 质量报告 + 7 项自检，纯离线）
+5. node tools/smoke-bis-adapter.mjs                    （插件 argv 拼装，桩）
+6. python tools/check-cli-envelope.py                  （真跑 CLI 的信封契约）
+7. python -m econ_core.missing --test                  （缺失分类自检，纯离线 0.1s）
+8. python -m econ_core.source_profiler --test          （来源画像自检，纯离线 0.2s）
+9. python -m econ_core.arbiter --test                  （口径判定自检，纯离线 0.3s）
+10. python -m econ_core.normalize --test                （规范化层自检）
+11. python -m econ_core.cross_validation --test         （交叉验证自检）
+12. python tools/compare-gdp.py                         （NBS vs World Bank 端到端）
+13. python tools/compare-gdp-3way.py                    （NBS vs WB vs IMF 三方交叉验证）
+14. python tools/compare-gdp-real.py                    （NBS vs IMF 实际增速，无汇率污染）
+15. python tools/compare-unemployment.py               （失业率三方：登记/调查 vs IMF LUR）
+16. python tools/compare-cpi.py                        （CPI 交叉验证：NBS vs FRED/OECD）
+17. python tools/scan-missing.py                       （缺失检测与分类）
+18. python tools/materialize-validated.py              （声明式清单落盘 validated）
+19. python tools/run-fill-strategy.py                  （填补策略执行器：只 leave_null/wait）
+20. python -m econ_core.credibility --test             （可信度评分自检，纯离线 0.5s）
+21. python tools/export.py                             （导出 CSV + SQLite + 数据字典）
+22. python tools/report.py --test                      （单文件 HTML 质量报告 + 7 项自检，纯离线）
 
 约定
 ----
@@ -110,6 +111,7 @@ CHECKS: list[Check] = [
     Check("smoke-worldbank-adapter", "node", ["tools/smoke-worldbank-adapter.mjs"]),
     Check("smoke-imf-adapter", "node", ["tools/smoke-imf-adapter.mjs"]),
     Check("smoke-fred-adapter", "node", ["tools/smoke-fred-adapter.mjs"]),
+    Check("smoke-bis-adapter", "node", ["tools/smoke-bis-adapter.mjs"]),
     # check-cli-envelope 要真跑 13 次网络调用（NBS 4 + WB 3 含 18MB 全量目录 + IMF 3 各约 12s），
     # 实测 48.6s；单个慢调用叠加 http_client 的 4 次重试可到 ~247s，故单独放宽到 420s。
     Check("check-cli-envelope", "python", ["tools/check-cli-envelope.py"], timeout_s=420),

@@ -90,6 +90,7 @@ PYTHONPATH: str = str(PROJECT_ROOT / "python")
 NBS_CLI = "econ_core.nbs_client_cli"
 WB_CLI = "econ_core.worldbank_client_cli"
 IMF_CLI = "econ_core.imf_client_cli"
+BIS_CLI = "econ_core.bis_client_cli"
 
 # --- 已知常量（来自第一阶段的探测结论，不使用随机探测） --------------------- #
 NBS_CID = "f7fd25aaad184414875632cf2327da60"
@@ -152,6 +153,16 @@ CASES: list[Case] = [
          ["list-indicators"]),
     Case("imf_client_cli list-countries NGDPD", IMF_CLI,
          ["list-countries", "--indicator", "NGDPD"]),
+    # --- BIS（方向 C 第三轮接入）。同上，R11 分类天然覆盖，无需新分支：
+    #     两个子命令都含 fetch -> 必有 fetched_at。
+    #     ⚠️ 注意这里**只加条目、不改任何已有条目**：BIS 是第五个源，它的 CLI 信封
+    #     若不被真跑一次覆盖，smoke-bis-adapter 的桩测试就只是 argv 拼装验证，
+    #     而 PROJECT_STATE §3.8 明确写过「smoke 只能验证 argv 拼装，验证不了真实
+    #     CLI 的信封契约」。两条 BIS 用例实测各约 2.5s（gzip 响应解压后约 47 KB）。---
+    Case("bis_client_cli fetch-cpi --unit 771", BIS_CLI,
+         ["fetch-cpi", "--unit", "771"]),
+    Case("bis_client_cli fetch-series WS_LONG_CPI A.CN.628", BIS_CLI,
+         ["fetch-series", "--dataset", "WS_LONG_CPI", "--key", "A.CN.628"]),
 ]
 
 # --------------------------------------------------------------------------- #
@@ -401,7 +412,9 @@ def main() -> int:
     print("check-cli-envelope: CLI 信封契约测试（真跑子进程，无桩）")
     print(f"  解释器    : {PYTHON}")
     print(f"  PYTHONPATH: {PYTHONPATH}")
-    print(f"  用例数    : {len(CASES)}（10 个子命令；wb list-countries 跑两次）")
+    print(f"  用例数    : {len(CASES)}（12 个子命令；wb list-countries 跑两次）")
+    print("  覆盖源    : nbs / worldbank / imf / bis —— **fred 不在覆盖内**（历史遗留，")
+    print("              见 PROJECT_STATE §3.8；它的信封契约目前只有 smoke 的 argv 桩覆盖）")
     print("=" * 78)
 
     n_pass = 0

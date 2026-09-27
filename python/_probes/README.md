@@ -118,3 +118,114 @@ cd D:\universe\econ-data-harvester
 * 处理决定：**只记录不修**。可选修法（把 `cid` 从 request 指纹里剔除、或落盘前
   校验 `cid` 是否在期望集合内）都会改到生产链路的落盘规则，在 NBS 明确接口语义
   之前保持现状。`nbs_client.fetch_indicator_data` 的 docstring 已就地记录该行为。
+
+---
+
+## 2026-09-27 探测：BIS / OECD / PWT / Maddison 的独立性判定
+
+**探测动机**：方向 C 第一轮（FRED `CHNCPIALLMINMEI`）与 NBS CPI 10 年全部落「一致」
+档（最大 0.081 pp），但 FRED 那条序列的上游本就是 NBS 经 OECD 转述 ——
+**一致性只证明转述无误，不是独立验证**。所以要去 CPI 维度找一个「真正独立编制」的源。
+
+**判定标准**（本轮统一口径）：*独立编制* = 发布机构**自己采集或自己估算**，
+而不是「拿到各国官方数据后做简单换算 / 汇编」。
+
+**探测结论：四个候选全部不是独立编制。**
+
+### 判定依据
+
+| 候选 | 是否独立编制 | 判定依据（实测） |
+|---|---|---|
+| **BIS** `WS_LONG_CPI` | ❌ 转载 | 官方 FAQ 原文：*"Consumer price indices are predominantly compiled by **national statistical offices**."* BIS 自己的加工只有**拼接**（*"constructed long consumer price indices, by joining the series available for consecutive periods"*）与**重定基**（2010=100） |
+| **OECD** `DF_PRICES_ALL` | ❌ 转载 | `CL_METHODOLOGY_PRI` 里中国只有 **`N` = "National"**（无 OECD 调和版）；且其 2015–2024 年度同比与 IMF WEO `PCPIPCH` **逐年逐位完全相同**（1.4/2.0/1.6/2.1/2.9/2.5/0.9/2.0/0.2/0.2） |
+| **PWT 11.0** | ❌ 二手 + 自研估算 | PPP 输入来自 ICP（*"PWT is based on the basic data on PPPs from the International Comparison Program"*），缺口用 WB 插值；中国自标 55/72 年为 `Extrapolated` |
+| **Maddison 2023** | ❌ 二手（自述） | *"builds on Angus Maddison's original dataset. The original estimates are kept intact"*；对中国 1952–2008 直接用 Wu (2014)；且**全库只有 `gdppc` + `pop`，不含任何价格数据** |
+
+### 对比表（五项要求：API / 独立性 / 中国指标 / 年份 / 接入成本）
+
+| | 公开 API | 独立编制 | 中国价格类指标 | 年份范围 | 接入成本 | 独立价值 |
+|---|---|---|---|---|---|---|
+| **BIS** | ✅ SDMX 2.1 免密钥 | ❌ 转载 NSO（自认） | 月度 CPI 指数 + 同比 | **1995-01 ~ 2026-08** | **低** | 拼接/重定基的独立实现 |
+| **OECD** | ✅ SDMX（**有 429**） | ❌ `N`=National | CPI；自编 PPP **无中国** | 2015=100 起 | 中 | **零**（与 IMF 逐位相同） |
+| **PWT 11.0** | ❌ 仅 XLSX/DTA | ❌ ICP/WB + 自研估算 | `pl_gdpo` 价格水平 | 1950–2023 | 高（TLS + 大文件） | 中国 55/72 年自标 Extrapolated |
+| **Maddison 2023** | ❌ 仅 XLSX/DTA | ❌ 自述二手 | **无** | 1–2022 | 高 | **零** |
+
+### 关键实测证据
+
+**BIS**
+
+- 端点 `https://stats.bis.org/api/v1/`；**`?format=jsondata` 恒 406**（`Unsupported format: jsondata`），
+  只能用 `format=sdmx-json`；`/datastructure/...` 端点实测**读超时**（180s），不可依赖
+- 密钥形状 **`FREQ.REF_AREA.UNIT_MEASURE` 三位都要给**（`CN.M` → 404
+  `No data for data query`，正确写法 `M.CN.771`）；维度顺序取自 `availableconstraint` 的 `cubeRegions`
+- `UNIT_MEASURE`：`771` = 同比 %，`628` = 指数（2010=100）
+- 实测规模：`M.CN.771` 368 条（1996-01 起）、`M.CN.628` 380 条（**1995-01 起**）、
+  `A.CN.628` 48 条（1978 起）、`A.CN.771` 47 条（1979 起）
+- **BIS 的 771 与它自己的 628 逐位吻合**（算过 `idx[y]/idx[y-1]*100-100`，11 年全等）
+  → 证实 BIS 是「自建指数 → 自行折算同比」，这是它的加工所在
+- 与 NBS「上年=100」对齐后差异：**max 0.174 pp（2018）/ mean 0.09 pp**，
+  与 NBS×FRED 基线（0.081 pp）**同量级**；差异来源 BIS 自述为舍入
+  （*"The year-on-year changes are calculated from the index data. Therefore, they can differ
+  from the official statistics due to rounding effects."*）
+
+**OECD**
+
+- structure 服务的 `format` 白名单不含 `jsondata`（报错正文列出：
+  `structure, xml-structure-3.0.0, sdmx-3.0, json-structure-2.0.0`）；
+  data 服务是**另一套**白名单（含 `jsondata` / `csv`）—— 见 PROJECT_STATE §3.12
+- `dataflow/all/all/latest?format=structure` → 200，**8,920,015 字节 / 1548 个 dataflow / 53 个 agency**；
+  `dataflow/OECD/all/latest` → 404 `No Results Found`（agency 必须写全，如 `OECD.SDD.TPS`）
+- `/data/` **拒绝不完整密钥**：`.../DF_PRICES_ALL,1.0/CHN` → 403 `Not enough key values in query, expecting 8 got 1`
+- 中国在 OECD **自编 PPP 全家桶里完全缺席**：`DF_PPP` / `DF_PPP_PPP` / `DF_PPP_CPL`（constraint 51 个地区）、
+  `DF_PP_CPL_M`（38 个）、`DF_PRICES_COICOP2018@DF_PRICES_C2018_ALL`（40 个）逐个查过，均无 CHN；
+  拉数据返回 404 `NoRecordsFound`
+- OECD 唯一发布的那个中国 PPP（`DF_TABLE4` 的 `PPP_B1GQ`）实测与 World Bank `PA.NUS.PPP`
+  **2015–2021 abs diff = 0.000000（6 位小数）**，2022–2023 差 0.06~0.08%（WB 修订所致）
+  → 那是世界银行 ICP 的数，不是 OECD 的
+- **限流**：约 15 次快速请求后 429（正文提示联系 OECD Data Explorer feedback form），
+  `Retry-After: 0` **不可信**（立刻重试仍 429），需 15~30s 静默；稳定做法 **9~12s 间隔 + 指数退避**
+- **没有机器可读的 provenance 字段**（`metadata/dataflow/...` → 403 `Invalid structure`，
+  `metadatastructure/...` → 404），来源只能靠数值比对反推 —— 上面两条结论正是这么得来的
+
+**PWT 11.0**（发布于 2025-10-07，DOI `10.34894/FABVLR`）
+
+- 观测值**只有 XLSX / DTA**；DataverseNL 的 REST API 只给元数据（`/api/datasets/:persistentId/` → 200 JSON）；
+  `cran.r-project.org/package=pwt11` → 404（`pwt10` 是旧版）；PyPI 无 `pwt` 包；**无 SDMX 端点**
+- 实测 `pwt110.dta` 13,690 行 = 185 国 × 74 年，**1950–2023**；
+  `pwt110.xlsx` Content-Length **5,839,841**，sha256 `7b337e94f39dfe…`（下载截断问题见 §3.11）
+- 变量（官方 Legend 原文）：`pl_gdpo` = "Price level of CGDPo (PPP/XR), price level of USA GDPo in 2021=1"；
+  参考年 PWT 11.0 从 2017 改为 **2021**
+- **`i_cig` 标志统计（中国）**：Benchmark 仅 **2005 / 2011 / 2017 / 2021 四年**；
+  ICP 时序基准或插值 2012–2016、2018–2020（8 年）；Interpolated 2006–2010（5 年）；
+  **Extrapolated 其余 55 年（1952–2004 及 2022–2023）** —— 即中国价格水平大部分年份
+  是**外推**的。实测 `pl_gdpo`：2005 = 0.2242 → 2011 = 0.4528 → 2021 = 0.6219 → 2023 = 0.5760
+- PWT 11.0 **换掉了中国 GDP 口径**：此前用 Wu (2014) 替代序列，11.0 改用官方 GDP
+  （UN NAMA，回溯到 1952），Wu 序列降级保留为 **`CH2`** —— 实测 `pwt110_na_data.dta`
+  里 `CHN`（1952–2025）与 `CH2`（1950–2021）并存，印证文档说法
+- 许可 CC BY 4.0
+
+**Maddison 2023**（DOI `10.34894/INZBF2`，Dataverse publicationDate 2024-04-26）
+
+- 实测下载并解析 `mpd2023_web.xlsx`（**4,903,804 字节**，sha256 `ecc5916ca12789b9…`，
+  与子代理独立下载的长度一致）；Dataverse 元数据 API 确认只含 2 个文件（XLSX + DTA）
+- 工作表：`Notes` / `Sources` / `GDPpc` / `Population` / `Full data` / `Regional data` / `Maddison original sources`
+- **`Full data` 表只有 6 列**：`countrycode, country, region, year, gdppc, pop`
+  —— **没有任何价格指数**，也没有 `cgdppc`
+- 中国：**776 个观测，公元 1 ~ 2022**（有 post-2020 数据：2021 gdppc = 18,666.60，
+  2022 = 19,238.18，2011$）；全库最大年份 2022，**无 2023+**
+- 中国来源（`Sources` 表原文）：1000–1661 Broadberry/Guan/Li (2018)；1661–1933 该文 + Xu et al. (2016)；
+  **1952–2008 Wu (2014)**（Conference Board EPWP #14-01）；人口 1990 起 Conference Board TED
+- 许可 CC BY 4.0，另有「图形展示」与「少于 12 国的子集」两种情形必须引用原始论文的附加条款
+
+### 本轮探测留下的证据物
+
+- `data/raw/_probe_pwt_maddison/maddison2023.xlsx`（4,903,804 B，`data/raw/*` 已被 gitignore，
+  不 commit，留作探测证据；sha256 与子代理独立下载交叉验证一致）
+- 被截断的 `pwt110.xlsx` **没有保留**（下载不完整，不是干净证据；PWT 各项事实均有
+  子代理的长度校验记录支撑）
+
+### 对后续方向的推论
+
+**正确的方向是把验证目标从「CPI」换成「价格水平」**，因为独立测量**存在**，只是不在 CPI 维度：
+世界银行 **ICP 2021** 是唯一真·独立价格采集（各经济体自己采集一篮子代表品，中国参加了
+2021 轮，NBS 2024-05 自行发布过结果）。单独立项，见 PROJECT_STATE §5.3。

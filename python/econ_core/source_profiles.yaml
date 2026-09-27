@@ -91,6 +91,22 @@ publishers:
     revision_policy: "FRED 转载上游（本例 OECD Main Economic Indicators），不独立修订"
     notes: "FRED 是二次汇编方。CHNCPIALLMINMEI 源自 OECD 的中国 CPI 序列。**实测 Chrome UA 会被 FRED 掐断连接（RemoteDisconnected），只有朴素 UA 可用**（见 fred_client 模块注释）"
 
+  bis:
+    key: bis
+    name: 国际清算银行
+    full_name: Bank for International Settlements
+    country: null
+    authority_level: international
+    data_url: https://stats.bis.org/
+    main_url: https://www.bis.org/
+    license: BIS 统计数据可公开使用；引用需署名 BIS
+    license_url: https://www.bis.org/terms_statistics.htm
+    commercial_use: unknown          # 条款页未能取到（详见下方 notes），商业再分发前请自行核实
+    redistribution: unknown          # 同上
+    update_frequency: monthly
+    revision_policy: "BIS 转载各国官方 CPI，不独立修订"
+    notes: "BIS 明确自认是转载方（官方 FAQ 原文：Consumer price indices are predominantly compiled by national statistical offices）。但对转载序列做了拼接（joining consecutive periods）和重定基（2010=100），这是 BIS 自己的加工。因此它对 NBS 序列构成'拼接+重定基'的独立实现，不是独立的价格采集。**实测两个接口坑**：① BIS 回的 content-encoding 头名是全小写，http_client 大小写敏感查找取不到，会漏解压 gzip（bis_client 就地绕开）；② ?format=jsondata 恒 406，只认 format=sdmx-json。"
+
 indicators:
 
   "nbs|gdp|cny_100m":
@@ -328,6 +344,50 @@ indicators:
     alias_of: "nbs|gdp|cny_100m"
     source_notes: "这是 normalize 自动推导出来的 series_key（source|region_code|indicator_id 的大写形式），与 nbs|gdp|cny_100m 是**同一条序列**，只是键形不同。保留此别名是为了让历史落盘文件与知识库能对上。"
 
+  "bis|WS_LONG_CPI|M.CN.771":
+    display_name: "中国 CPI 同比（月度，BIS 转载）"
+    definition: "BIS 转载的中国 CPI 同比增速，由 BIS 从自建指数（2010=100）推算得到。"
+    statistical_method: "转载（来源 NBS）"
+    collecting_agency: "中国国家统计局；BIS 做拼接与重定基"
+    coverage: "中国"
+    population_scope: "城乡居民消费"
+    unit: "%"
+    frequency: monthly
+    aggregation: "本项目按年均值聚合到年"
+    start_year: 1995
+    start_year_note: "月度同比（771）实测起点为 1996-01（368 期）；指数（628）实测起点为 1995-01（380 期，多出 1995 全年 12 期，因为同比需要上年基期）。此处 1995 指 628 的起点"
+    discontinued_after: null
+    revision_policy: "BIS 转载 NBS 数据，不独立修订；BIS 侧随上游发布更新"
+    source_notes: "实测与 NBS 上年=100 差异 ≤ 0.174 pp（max），mean 0.09 pp。差异来源 BIS 自述：'The year-on-year changes are calculated from the index data. Therefore, they can differ from the official statistics due to rounding effects.'。**关键实测**：BIS 的 771 与由它自己的 628 折算出的月度同比逐位吻合（368 个可比月 max diff = 0.000001 pp），证明 771 是 BIS 自建指数折算的结果。**这是转载+加工，不是独立采集**（见 §3.10 与 python/_probes/README.md 的独立性判定）"
+    divergence_hint: "残差属「BIS 自建指数折算 + 舍入」级噪声，不是口径差异；BIS 对长序列做了拼接与重定基，跨拼接点可能有台阶（下一轮拼接断点检查的目标）"
+    comparability:
+      "with_nbs|cpi|全国居民消费价格指数（上年=100） (%)": high
+    references:
+      - https://stats.bis.org/
+      - https://data.bis.org/topics/CPI
+
+  "bis|WS_LONG_CPI|M.CN.628":
+    display_name: "中国 CPI 指数（月度，BIS 转载并重定基）"
+    definition: "BIS 转载并重定基的中国 CPI 指数，基准 2010=100；BIS 将其用于实际有效汇率与实际住宅价格的平减。"
+    statistical_method: "转载 + 拼接 + 重定基（来源 NBS；BIS 自述 'constructed long consumer price indices, by joining the series available for consecutive periods'）"
+    collecting_agency: "中国国家统计局（原始采集）；BIS 做拼接与重定基"
+    coverage: "中国（BIS 的 CPI 数据集覆盖 63 个地区）"
+    population_scope: "城乡居民消费"
+    unit: "指数（2010=100）"
+    frequency: monthly
+    aggregation: "本项目按年均值聚合到年（如需转同比，用 idx[m]/idx[m-12]*100-100，实测与 771 逐位吻合）"
+    start_year: 1995
+    discontinued_after: null
+    revision_policy: "同 771：BIS 转载，不独立修订"
+    source_notes: "实测 1995-01 ~ 2026-08，380 期，无缺值。与 NBS 的差异要先统一口径：NBS 是「上年=100」的同比指数，本序列是「2010=100」的水平指数，**不可直接比较**，必须先折算（见 tools/compare-cpi.py 的做法）。BIS 明确提示其 CPI 数据是研究数据集，同比由指数折算而来，可能与官方统计因舍入而有差异。"
+    divergence_hint: "口径差异（水平指数 vs 同比指数）必须先折算；折算后的残差同 771"
+    comparability:
+      "with_bis|WS_LONG_CPI|M.CN.771": high
+      "with_nbs|cpi|全国居民消费价格指数（上年=100） (%)": medium
+    references:
+      - https://stats.bis.org/
+      - https://data.bis.org/topics/CPI
+
 # 口径「家族」——供对比使用
 # ------------------------
 # statistical_method / coverage 是**自由文本**，措辞不同不代表口径不同
@@ -382,6 +442,14 @@ families:
   "fred|CHNCPIALLMINMEI":
     method: 汇总汇编
     coverage: 全国
+    scope: 城乡居民家庭消费
+  "bis|WS_LONG_CPI|M.CN.771":
+    method: 转载
+    coverage: 中国
+    scope: 城乡居民家庭消费
+  "bis|WS_LONG_CPI|M.CN.628":
+    method: 转载
+    coverage: 中国
     scope: 城乡居民家庭消费
 
 
