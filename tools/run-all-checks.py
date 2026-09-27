@@ -19,11 +19,13 @@
 ------------
 1. node tools/smoke-nbs-adapter.mjs                    （插件 argv 拼装，桩）
 2. node tools/smoke-worldbank-adapter.mjs              （插件 argv 拼装，桩）
-3. python tools/check-cli-envelope.py                  （真跑 CLI 的信封契约）
-4. python -m econ_core.normalize --test                （规范化层自检）
-5. python -m econ_core.cross_validation --test         （交叉验证自检）
-6. python tools/compare-gdp.py                         （NBS vs World Bank 端到端）
-7. python tools/compare-gdp-3way.py                    （NBS vs WB vs IMF 三方交叉验证）
+3. node tools/smoke-imf-adapter.mjs                    （插件 argv 拼装，桩）
+4. python tools/check-cli-envelope.py                  （真跑 CLI 的信封契约）
+5. python -m econ_core.normalize --test                （规范化层自检）
+6. python -m econ_core.cross_validation --test         （交叉验证自检）
+7. python tools/compare-gdp.py                         （NBS vs World Bank 端到端）
+8. python tools/compare-gdp-3way.py                    （NBS vs WB vs IMF 三方交叉验证）
+9. python tools/compare-gdp-real.py                    （NBS vs IMF 实际增速，无汇率污染）
 
 约定
 ----
@@ -72,6 +74,7 @@ class Check(NamedTuple):
     name: str               # 显示名（也用于对齐）
     kind: str               # "python" | "node"
     args: list[str]         # python: ["-m", mod, ...] 或 ["tools/x.py"]；node: ["tools/x.mjs"]
+    timeout_s: Optional[int] = None   # 覆盖全局 TIMEOUT_S（网络密集型检查用）
 
 
 class Result(NamedTuple):
@@ -88,12 +91,16 @@ class Result(NamedTuple):
 CHECKS: list[Check] = [
     Check("smoke-nbs-adapter", "node", ["tools/smoke-nbs-adapter.mjs"]),
     Check("smoke-worldbank-adapter", "node", ["tools/smoke-worldbank-adapter.mjs"]),
-    Check("check-cli-envelope", "python", ["tools/check-cli-envelope.py"]),
+    Check("smoke-imf-adapter", "node", ["tools/smoke-imf-adapter.mjs"]),
+    # check-cli-envelope 要真跑 13 次网络调用（NBS 4 + WB 3 含 18MB 全量目录 + IMF 3 各约 12s），
+    # 实测 48.6s；单个慢调用叠加 http_client 的 4 次重试可到 ~247s，故单独放宽到 420s。
+    Check("check-cli-envelope", "python", ["tools/check-cli-envelope.py"], timeout_s=420),
     Check("normalize --test", "python", ["-m", "econ_core.normalize", "--test"]),
     Check("cross_validation --test", "python",
           ["-m", "econ_core.cross_validation", "--test"]),
     Check("compare-gdp", "python", ["tools/compare-gdp.py"]),
     Check("compare-gdp-3way", "python", ["tools/compare-gdp-3way.py"]),
+    Check("compare-gdp-real", "python", ["tools/compare-gdp-real.py"]),
 ]
 
 # --------------------------------------------------------------------------- #
@@ -121,7 +128,7 @@ def _decode(data: object) -> str:
     return str(data)
 
 
-def run_check(argv: list[str]) -> Result:
+def run_check(argv: list[str], timeout_s: int = TIMEOUT_S) -> Result:
     """跑一条检查并返回 Result。**不抛异常**：超时/OSError 都落成失败结果。"""
     env = dict(os.environ)
     env["PYTHONPATH"] = PYTHONPATH
@@ -134,12 +141,12 @@ def run_check(argv: list[str]) -> Result:
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=TIMEOUT_S,
+            timeout=timeout_s,
         )
     except subprocess.TimeoutExpired as exc:
         return Result(False, None, time.monotonic() - started,
                       _decode(exc.stdout), _decode(exc.stderr),
-                      f"超时 >{TIMEOUT_S}s")
+                      f"超时 >{timeout_s}s")
     except OSError as exc:
         return Result(False, None, time.monotonic() - started, "", "",
                       f"{type(exc).__name__}: {exc}")
@@ -208,7 +215,7 @@ def main() -> int:
         if argv is None:
             result = Result(False, None, 0.0, "", "", build_err)
         else:
-            result = run_check(argv)
+            result = run_check(argv, check.timeout_s or TIMEOUT_S)
         elapsed_total += result.elapsed
 
         print(check_line(index, total, check.name, verdict_text(result)))

@@ -89,6 +89,7 @@ PYTHONPATH: str = str(PROJECT_ROOT / "python")
 
 NBS_CLI = "econ_core.nbs_client_cli"
 WB_CLI = "econ_core.worldbank_client_cli"
+IMF_CLI = "econ_core.imf_client_cli"
 
 # --- 已知常量（来自第一阶段的探测结论，不使用随机探测） --------------------- #
 NBS_CID = "f7fd25aaad184414875632cf2327da60"
@@ -143,6 +144,14 @@ CASES: list[Case] = [
          ["list-countries"], special="no_region"),
     Case("worldbank_client_cli list-countries --region EAS", WB_CLI,
          ["list-countries", "--region", "EAS"]),
+    # --- IMF WEO（第三阶段接入）。R11 分类天然覆盖，无需新分支：
+    #     fetch-indicator 含 fetch -> 必有 fetched_at；两个 list-* 含 list -> 必有 row_count。---
+    Case("imf_client_cli fetch-indicator NGDPD CHN", IMF_CLI,
+         ["fetch-indicator", "--indicator", "NGDPD", "--country", "CHN"]),
+    Case("imf_client_cli list-indicators", IMF_CLI,
+         ["list-indicators"]),
+    Case("imf_client_cli list-countries NGDPD", IMF_CLI,
+         ["list-countries", "--indicator", "NGDPD"]),
 ]
 
 # --------------------------------------------------------------------------- #
@@ -392,7 +401,7 @@ def main() -> int:
     print("check-cli-envelope: CLI 信封契约测试（真跑子进程，无桩）")
     print(f"  解释器    : {PYTHON}")
     print(f"  PYTHONPATH: {PYTHONPATH}")
-    print(f"  用例数    : {len(CASES)}（7 个子命令，其中 list-countries 跑两次）")
+    print(f"  用例数    : {len(CASES)}（10 个子命令；wb list-countries 跑两次）")
     print("=" * 78)
 
     n_pass = 0
