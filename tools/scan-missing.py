@@ -46,7 +46,9 @@ from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
-from econ_core import imf_client, missing, nbs_client, normalize, worldbank_client  # noqa: E402
+from econ_core import (  # noqa: E402
+    fred_client, imf_client, missing, nbs_client, normalize, worldbank_client,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VALIDATED_DIR = PROJECT_ROOT / "data" / "validated"
@@ -57,6 +59,13 @@ Y_WINDOW: list[str] = [str(y) for y in YEARS]
 PERIODS: list[str] = [f"{y}YY" for y in YEARS]
 
 REGION_CODE = "000000000000"
+
+#: FRED CPI（OECD 派生）：月度指数 2015=100，本项目按年均值聚合到年
+FRED_CPI = {
+    "series_id": "CHNCPIALLMINMEI",
+    "display_name": "Consumer Price Index: All Items: Total for China（指数）",
+    "unit": "指数（2015=100）",
+}
 
 # --- 已知取数参数（全部来自前几轮实测） ---
 NBS_GDP = {"cid": "f7fd25aaad184414875632cf2327da60",
@@ -217,6 +226,36 @@ def build_declared() -> list[dict[str, Any]]:
     wreq = worldbank_client.indicator_request(WB_GDP["country"], WB_GDP["indicator"],
                                               WB_GDP["date_range"])
     wmeta = normalize.source_meta_from_parsed_worldbank("country_indicator", wreq)
+    # 8) FRED CPI（OECD 派生；月度指数 2015=100 -> 按年均值聚合到年）
+    #    与上面 NBS 调查失业率同一套做法：先聚合、再重算 row_sha16、留 aggregated_from_months。
+    #    只有满 12 个月的年份进序列（2025 年 FRED 只到 4 月，被排除）。
+    frows = fred_client.fetch_series(FRED_CPI["series_id"])
+    fmeta = fred_client.last_meta()
+    fbuckets: dict[str, list[float]] = {}
+    for r in frows:
+        v = _parse(r.get("value"))
+        if v is not None:
+            fbuckets.setdefault(str(r["period"])[:4], []).append(v)
+    farows: list[dict[str, Any]] = []
+    for year in Y_WINDOW:
+        vals = fbuckets.get(year, [])
+        if len(vals) < 12:
+            continue
+        farows.append(normalize._mk_row(
+            REGION_CODE, "全国", FRED_CPI["series_id"], "",
+            FRED_CPI["display_name"], year, "annual",
+            sum(vals) / len(vals), FRED_CPI["unit"], "fred",
+            str(fmeta.get("fetched_at", "")), str(fmeta.get("raw_cache", "")),
+            {"series_id": FRED_CPI["series_id"], "aggregated_from_months": len(vals),
+             "note": "由 FRED 月度指数（2015=100）算术平均得到；row_sha16 已按聚合后的行重算"},
+            extra={"aggregated_from_months": len(vals)}))
+    out.append({
+        "label": f"FRED {FRED_CPI['series_id']} 月均->年 2015-2024",
+        "rows": farows,
+        "meta": {"expected_periods": Y_WINDOW,
+                 "series_key": f"fred|{FRED_CPI['series_id']}"},
+    })
+
     out.append({
         "label": f"World Bank {WB_GDP['indicator']} (LCU) 2015-2024",
         "rows": normalize.normalize_worldbank_observations(wraw, wmeta),

@@ -587,7 +587,7 @@ def build_context(offline: bool = False) -> dict[str, Any]:
          "sub": f"已落盘长表；知识库另有 {max(0, len(creds) - len(series))} 条仅用于对比"
                   if len(creds) > len(series) else "已落盘长表",
          "tone": "info"},
-        {"label": "总观测行数", "value": str(n_rows), "sub": "9 条序列的全部年份",
+        {"label": "总观测行数", "value": str(n_rows), "sub": f"{len(series)} 条序列的全部年份",
          "tone": "info"},
         {"label": "缺失行数", "value": str(len(null_rows)),
          "sub": " / ".join(f"{k} {v}" for k, v in sorted(by_class.items())) or "无缺失",

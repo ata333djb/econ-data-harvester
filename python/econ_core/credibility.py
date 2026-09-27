@@ -461,8 +461,9 @@ def _selftest() -> int:
         print(f"  {i:>2}. {rec['score']:>6.2f}  {rec['grade']:<6}  {rec['series_key']}")
         print(f"      {dims}")
     print(f"  合计 {len(records)} 条")
-    if not (9 <= len(records) <= 11):
-        failures.append(f"5: score_all 期望 9-11 条，实际 {len(records)}")
+    expected_n = len(_scorable_keys())
+    if len(records) != expected_n or expected_n < 9:
+        failures.append(f"5: score_all 应覆盖知识库全部规范键（{expected_n} 条），实际 {len(records)}")
 
     print()
     print("=" * 92)

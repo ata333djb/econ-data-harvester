@@ -77,6 +77,20 @@ publishers:
     revision_policy: "WEO 每年两次（4 月 / 10 月）整体重算并回溯修订历史值，并公布未来 5-6 年预测；本项目实测 CHN 覆盖到 2031（含预测）"
     notes: "DataMapper API 端点 api/v1。**实测 Akamai 会 403 掉 Chrome UA，只放行朴素 UA**（见 imf_client 模块注释）"
 
+  fred:
+    key: fred
+    name: 圣路易斯联储
+    full_name: Federal Reserve Bank of St. Louis (FRED)
+    country: null
+    authority_level: international
+    data_url: https://fred.stlouisfed.org/
+    main_url: https://www.stlouisfed.org/
+    license: FRED 数据开放；具体序列的许可取决于原始来源（本例为 OECD）
+    license_url: https://fred.stlouisfed.org/legal/
+    update_frequency: monthly
+    revision_policy: "FRED 转载上游（本例 OECD Main Economic Indicators），不独立修订"
+    notes: "FRED 是二次汇编方。CHNCPIALLMINMEI 源自 OECD 的中国 CPI 序列。**实测 Chrome UA 会被 FRED 掐断连接（RemoteDisconnected），只有朴素 UA 可用**（见 fred_client 模块注释）"
+
 indicators:
 
   "nbs|gdp|cny_100m":
@@ -291,6 +305,25 @@ indicators:
       - https://www.imf.org/en/Publications/WEO
       - https://www.imf.org/external/datamapper/api/v1/indicators
 
+  "fred|CHNCPIALLMINMEI":
+    display_name: "Consumer Price Index: All Items: Total for China（指数）"
+    definition: "OECD Main Economic Indicators 发布的中国 CPI 全项指数，基准 2015=100。"
+    statistical_method: "汇总汇编（OECD 二次汇编）"
+    collecting_agency: "OECD；原始数据来自中国国家统计局"
+    coverage: "中国全国"
+    population_scope: "城乡居民消费"
+    unit: "指数（2015=100）"
+    frequency: monthly
+    aggregation: "本项目按年均值聚合到年"
+    start_year: unknown
+    discontinued_after: null
+    revision_policy: unknown
+    source_notes: "与 NBS CPI 口径不完全相同：NBS 是「上年=100」，FRED 是「2015=100 指数」。对比时需要转成同一口径。注意 FRED 的原始数据来自中国国家统计局（OECD 二次汇编），所以一致性高不代表独立验证。"
+    comparability:
+      "with_nbs|cpi|全国居民消费价格指数（上年=100） (%)": medium
+    references:
+      - https://fred.stlouisfed.org/series/CHNCPIALLMINMEI
+
   "NBS|000000000000|db8e5a86c08246e79b1b11251927e740":
     alias_of: "nbs|gdp|cny_100m"
     source_notes: "这是 normalize 自动推导出来的 series_key（source|region_code|indicator_id 的大写形式），与 nbs|gdp|cny_100m 是**同一条序列**，只是键形不同。保留此别名是为了让历史落盘文件与知识库能对上。"
@@ -346,6 +379,10 @@ families:
     method: 汇总汇编
     coverage: 中国大陆
     scope: 经济活动总量
+  "fred|CHNCPIALLMINMEI":
+    method: 汇总汇编
+    coverage: 全国
+    scope: 城乡居民家庭消费
 
 
 fields:

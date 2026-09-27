@@ -6,7 +6,7 @@
 
 权威性顺序（冲突时以序号小的为准）：
 
-1. 门禁 tools/run-all-checks.py 的**实际输出**（当前应为 19/19 PASS）——这是唯一硬标准
+1. 门禁 tools/run-all-checks.py 的**实际输出**（当前应为 21/21 PASS）——这是唯一硬标准
 2. 本文件
 3. 各模块 docstring —— 细节、实测证据、踩坑经过都写在那里
 
@@ -22,6 +22,7 @@
 - python/econ_core/nbs_client.py —— 国家统计局新版数据平台客户端（POST getEsDataByIndicatorIdAndDa / GET 目录树、默认指标、省级列表）
 - python/econ_core/worldbank_client.py —— World Bank v2 REST 客户端（指标数据 / 指标搜索 / 国家列表）
 - python/econ_core/imf_client.py —— IMF DataMapper v1 客户端（指标数据 / 指标目录 / 国家列表）
+- python/econ_core/fred_client.py —— FRED（fredgraph.csv 免密钥端点）客户端；固定朴素 UA，按日期分布自动识别频率（**本轮新增**）
 
 **规范化层**
 
@@ -33,9 +34,11 @@
 - python/econ_core/nbs_client_cli.py —— NBS 四子命令 CLI（list-provinces / get-default-indicator / get-catalog-tree / fetch-indicator）
 - python/econ_core/worldbank_client_cli.py —— World Bank 三子命令 CLI（fetch-indicator / list-indicators / list-countries）
 - python/econ_core/imf_client_cli.py —— IMF 三子命令 CLI（fetch-indicator / list-indicators / list-countries）
+- python/econ_core/fred_client_cli.py —— FRED 两子命令 CLI（fetch-series / list-search；搜索需 api_key，恒返回空列表）
 - src/plugins/nbs-adapter.js —— 注册 nbs_fetch_indicator / nbs_get_catalog_tree / nbs_get_default_indicator / nbs_list_provinces 四个工具（薄壳转发 CLI）
 - src/plugins/worldbank-adapter.js —— 注册 wb_fetch_indicator / wb_list_indicators / wb_list_countries 三个工具
 - src/plugins/imf-adapter.js —— 注册 imf_fetch_indicator / imf_list_indicators / imf_list_countries 三个工具
+- src/plugins/fred-adapter.js —— 注册 fred_fetch_series / fred_list_search 两个工具
 - src/plugins/hello.js —— 最小宿主插件，只用来证明 preset 装配链路可激活（不参与业务）
 
 **验证与分析层**
@@ -44,7 +47,7 @@
 - python/econ_core/missing.py —— 缺失检测与**四分类**：true_gap / not_yet_published / discontinued / series_start（判定优先级：先尾部 >=3 年，再尾部 <3 年，再头部，最后中段）
 - python/econ_core/fill_strategy.py —— 填补策略执行器：把决策写成行级元数据，**当前不执行任何插值**（出现 interpolate 直接抛 NotImplementedError）
 - python/econ_core/source_profiler.py —— 来源画像：profile_series / compare_profiles / explain_divergence（**本轮新增**）
-- python/econ_core/source_profiles.yaml —— **人工编纂**的来源画像知识库：3 个发布机构 + 10 条指标口径 + 18 个字段语义 + 口径家族表
+- python/econ_core/source_profiles.yaml —— **人工编纂**的来源画像知识库：4 个发布机构 + 13 条指标口径 + 18 个字段语义 + 口径家族表
 - python/econ_core/arbiter.py —— 口径判定仲裁：把「画像判定」与「实测差异（读 cross_check 产物）」配成一条记录，给出 同口径 / 可桥接 / 不可拼接 / 人工复核 四值判定 + alignment（画像与实测是否同调）
 - python/econ_core/credibility.py —— 五维可信度评分（Expertise 0.25 / Provenance 0.20 / Timeliness 0.10 / Transparency 0.15 / Coherence 0.30）-> 0-100 分 + high/medium/low（**本轮新增**）
 
@@ -57,46 +60,47 @@
 
 - python/econ_core/README.md —— 生产层已知上游事实（失业率两条口径、登记失业率 2022 起停更等）
 - python/_probes/README.md —— 逆向探测脚本索引与已知观察（NBS 接口考古、缓存键缺陷等）
-- PROJECT_STATE.md —— 本文件
 
-### 1.2 门禁：19 项（tools/run-all-checks.py，当前 19/19 PASS）
+### 1.2 门禁：21 项（tools/run-all-checks.py，当前 21/21 PASS）
 
 | # | 检查 | 类型 | 说明 |
 |---|---|---|---|
 | 1 | smoke-nbs-adapter | node | NBS 插件 argv 拼装（桩替换 execFile，不 spawn） |
 | 2 | smoke-worldbank-adapter | node | World Bank 插件 argv 拼装 |
 | 3 | smoke-imf-adapter | node | IMF 插件 argv 拼装 |
-| 4 | check-cli-envelope | python | 真跑 10 个子命令（11 用例）校验 stdout 信封契约 R1-R11；timeout 420s |
-| 5 | missing --test | python | 缺失四分类自检（纯离线，约 0.3s） |
-| 6 | source_profiler --test | python | 来源画像自检，8 个场景（纯离线，约 0.4s） |
-| 7 | arbiter --test | python | 口径判定自检，7 个场景（纯离线，约 0.3s） |
-| 8 | normalize --test | python | 规范化层自检（含 row_sha16 唯一性、i_name null 补齐） |
-| 9 | cross_validation --test | python | 交叉验证四段阈值自检 |
-| 10 | compare-gdp | python | NBS vs World Bank 中国 GDP 端到端 |
-| 11 | compare-gdp-3way | python | NBS vs WB vs IMF 三方（汇率取自 WB PA.NUS.FCRF）；timeout 420s |
-| 12 | compare-gdp-real | python | NBS GDP 指数 vs IMF NGDP_RPCH 实际增速（无汇率污染） |
-| 13 | compare-unemployment | python | 登记失业率 / 调查失业率 / IMF LUR 三方（百分点） |
-| 14 | scan-missing | python | 缺失检测与分类扫描，产出 data/validated/missing_report.json；timeout 420s |
-| 15 | materialize-validated | python | 声明式清单落盘 data/validated/；timeout 420s |
-| 16 | run-fill-strategy | python | validated → processed（零填充，**已脱网**，约 0.4s） |
-| 17 | credibility --test | python | 可信度评分自检，5 个场景（纯离线，约 0.6s） |
-| 18 | export | python | processed → CSV / SQLite / 数据字典（纯离线） |
-| 19 | report | python | 5 份 JSON → 单文件 HTML 质量报告 + 7 项自检（纯离线，约 1s） |
+| 4 | smoke-fred-adapter | node | FRED 插件 argv 拼装（含 start/end 可选参数） |
+| 5 | check-cli-envelope | python | 真跑 10 个子命令（11 用例）校验 stdout 信封契约 R1-R11；timeout 420s |
+| 6 | missing --test | python | 缺失四分类自检（纯离线，约 0.3s） |
+| 7 | source_profiler --test | python | 来源画像自检，8 个场景（纯离线，约 0.4s） |
+| 8 | arbiter --test | python | 口径判定自检，7 个场景（纯离线，约 0.3s） |
+| 9 | normalize --test | python | 规范化层自检（含 row_sha16 唯一性、i_name null 补齐） |
+| 10 | cross_validation --test | python | 交叉验证四段阈值自检 |
+| 11 | compare-gdp | python | NBS vs World Bank 中国 GDP 端到端 |
+| 12 | compare-gdp-3way | python | NBS vs WB vs IMF 三方（汇率取自 WB PA.NUS.FCRF）；timeout 420s |
+| 13 | compare-gdp-real | python | NBS GDP 指数 vs IMF NGDP_RPCH 实际增速（无汇率污染） |
+| 14 | compare-unemployment | python | 登记失业率 / 调查失业率 / IMF LUR 三方（百分点） |
+| 15 | compare-cpi | python | CPI 交叉验证：NBS vs FRED/OECD（百分点）；timeout 420s |
+| 16 | scan-missing | python | 缺失检测与分类扫描，产出 data/validated/missing_report.json；timeout 420s |
+| 17 | materialize-validated | python | 声明式清单落盘 data/validated/；timeout 420s |
+| 18 | run-fill-strategy | python | validated → processed（零填充，**已脱网**，约 0.4s） |
+| 19 | credibility --test | python | 可信度评分自检，5 个场景（纯离线，约 0.6s） |
+| 20 | export | python | processed → CSV / SQLite / 数据字典（纯离线） |
+| 21 | report | python | 5 份 JSON → 单文件 HTML 质量报告 + 7 项自检（纯离线，约 1s） |
 
-门禁的运行顺序**有依赖**：materialize-validated（15）-> run-fill-strategy（16）-> credibility（17）-> export（18）-> report（19）最后。credibility 读 validated + processed + cross_check 三样产物，所以不能挪到 arbiter 旁边（干净检出时会误报）。check-cli-envelope 与三个 compare 脚本是网络密集型，超时放宽到 420s。
+门禁的运行顺序**有依赖**：materialize-validated（17）-> run-fill-strategy（18）-> credibility（19）-> export（20）-> report（21）最后。credibility 读 validated + processed + cross_check 三样产物，所以不能挪到 arbiter 旁边（干净检出时会误报）。check-cli-envelope 与三个 compare 脚本是网络密集型，超时放宽到 420s。
 
 ### 1.3 当前数据规模
 
-- **声明式序列数**：9 条（NBS 6 + World Bank 1 + IMF 2）。missing_report.json 里的 n_series=19 是**含重复**的：声明式 9 条 + 落盘扫描 10 条键，同一条序列被算两遍
-- **总行数**：142 行（9 条落盘序列的全部年份合计）。历史提醒：早期写的 152 是**重复计数**（alias 副本 `nbs|000000000000|db8e...` 与 `nbs|gdp|cny_100m` 是同一条序列，被算了两遍）。**export.py 现在按规范键去重**，所以 CSV / SQLite / 数据字典也都是一致口径
+- **声明式序列数**：**10 条**（NBS 6 + World Bank 1 + IMF 2 + **FRED 1**）。missing_report.json 里的 n_series=20 是**含重复**的：声明式 10 条 + 落盘扫描 10 条键
+- **总行数**：**152 行**（10 条落盘序列合计：原 142 + FRED CPI 年均值 10 行）。历史提醒：曾经的 152 是重复计数（alias 副本算了两遍），现已由 export.py 去重修正；这次的 152 是真实口径
 - **缺失行数**：10 行（value 为 null / 空串 / NULL，**一个都没有填补**）
 - **缺失分类（按行统计）**：series_start 5 / discontinued 3 / not_yet_published 2 / true_gap **0**
 - **缺失动作（按行统计）**：leave_null 8 / wait 2 / interpolate 0
-- **row_sha16 覆盖率**：142/142（全部唯一）
+- **row_sha16 覆盖率**：152/152（全部唯一）
 - 落盘位置：data/validated/（9 个长表 JSON + missing_report.json）→ data/processed/（10 个带缺失元数据的 JSON）→ data/output/（CSV + SQLite + 字典）
-- 知识库另有 **2 条只用于对比、未落盘**的序列（nbs|gdp|index_prev_year_100、imf|NGDP_RPCH），所以知识库规范键 11 条 > 落盘序列 9 条
+- 知识库另有 **2 条只用于对比、未落盘**的序列（nbs|gdp|index_prev_year_100、imf|NGDP_RPCH），所以知识库规范键 13 条 > 落盘序列 10 条
 
-10 个 series_key（9 条声明式序列 + 1 条别名键；知识库必须与之一一对应）：
+11 个 series_key（10 条声明式序列 + 1 条别名键；知识库必须与之一一对应）：
 
 1. nbs|gdp|cny_100m
 2. nbs|cpi|全国居民消费价格指数（上年=100） (%)
@@ -107,14 +111,15 @@
 7. worldbank|NY.GDP.MKTP.CN
 8. imf|NGDPD
 9. imf|LUR（起点 2017）
-10. NBS|000000000000|db8e5a86c08246e79b1b11251927e740（**别名**，指向第 1 条）
+10. fred|CHNCPIALLMINMEI（FRED/OECD 中国 CPI 指数，月度 -> 年均值；**本轮新增**）
+11. NBS|000000000000|db8e5a86c08246e79b1b11251927e740（**别名**，指向第 1 条）
 
-### 1.4 最近一轮新增（方向 D 第四轮：图表内联）
+### 1.4 最近一轮新增（方向 C 第一轮：FRED CPI 交叉验证）
 
-- tools/report.py —— Plotly 2.27.0 **内联**进 HTML（首次联网拉一次落 raw 缓存，之后离线复用）；新增 `--offline`（无缓存即报错，不联网）
-- 报告 46KB -> **3.6MB**，从此**断网双击也能看**（这是「发给同事就能用」的最后一个硬缺口）
-- 自检第 1 项阈值 30KB -> 3MB；第 3 项改为「无外部 script 引用 + 有内联标记」
-- 注意：Plotly bundle 自己内部含 1 处字符串 cdn.plot.ly（topojsonURL 默认值），不是外部引用
+- 新增 python/econ_core/fred_client.py + fred_client_cli.py + src/plugins/fred-adapter.js + tools/smoke-fred-adapter.mjs（第二个独立源，免密钥 fredgraph.csv 直取）
+- 新增 tools/compare-cpi.py：NBS「上年=100」vs FRED/OECD「2015=100 指数」→ 先年均值再转同比，逐年比对（阈值 0.3/1.0/2.0 pp）
+- 实测结论：10 年**全部落在「一致」档**（最大 |差| 0.081 pp、均值 0.031 pp）——但 FRED 的原始数据来自 NBS（OECD 转述），这证明的是**转述无误**，不等于独立验证
+- 数据规模 9 -> **10 条序列**、142 -> **152 行**；门禁 19 -> **21 项**
 
 ---
 
@@ -212,12 +217,15 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 - 处置：**不改签名**，只在 nbs_client.fetch_indicator_data 的 docstring 里记录了实测证据
 - 副作用（已知未修）：cid 参与 parsed 落盘的文件名指纹，所以错 cid 会写出**另一个指纹的副本**，内容与正版相同。详见 python/_probes/README.md 的「已知观察」
 
-### 3.2 IMF 的 Akamai 会 403 掉 Chrome UA
+### 3.2 境外源会拒绝 Chrome UA（IMF 的 Akamai、FRED）
 
 - 现象：用 http_client 默认头（Chrome 128 UA）请求 api.imf.org 的 DataMapper -> HTTP 403 AkamaiGHost Access Denied（连站点根 https://www.imf.org/ 也 403）
 - 解法：**只把 User-Agent 换成 python-urllib/3.12**，其余默认头保留，同一 URL 立刻 200 + application/json。方向与「伪装成浏览器」相反
 - 已固化在 imf_client.IMF_HEADERS。**不要顺手改回 Chrome**
 - 同源坑：/v1/{indicator}/{country} 的 country 路径段**不做服务端过滤**（实测 /NGDPD/CHN 仍返回 229 个国家），过滤必须在客户端做
+
+**第二个实例（FRED，本轮踩到）**：fredgraph.csv 对默认 Chrome UA 直接 `RemoteDisconnected`（重试 3 次全失败），空 UA 也不行，只有 `python-urllib/3.12` 能拿到 200。已固化在 fred_client.FRED_HEADERS。
+两个源都是「伪装浏览器反而被拒」，所以：**接新的境外源时先试朴素 UA，别急着加浏览器头**。
 
 ### 3.3 NBS 的 i_name 有时是 null
 
@@ -286,8 +294,6 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 - 沙箱下 node 的 child_process 管道 stdio 会 spawn EPERM，所以 smoke 脚本必须走桩、不能真起进程
 - 门禁里 check-cli-envelope / 三个 compare / scan-missing / materialize-validated 都是网络密集型，单次耗时波动可达 5-6 倍（16s -> 103s），因此各自 420s 超时；run-fill-strategy 已脱网（0.4s）
 
-**展示层**
-
 - shutil.which("node") 在本机解析到带空格的路径（D:\New Folder\node.EXE），失败块里的命令必须给含空格的参数加引号才能复制粘贴执行
 
 ### 3.9 缺失统计有两个口径，别混用（也不要把大写 NBS 目录当 bug）
@@ -333,7 +339,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
                                                                                 v
                                           (下一轮) Arbiter: 同口径 / 可桥接 / 不可拼接
 
-    横切: tools/run-all-checks.py —— 19 项门禁，任何改动后必跑
+    横切: tools/run-all-checks.py —— 21 项门禁，任何改动后必跑
 
 ### 4.2 每层职责与产物
 
@@ -366,29 +372,27 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 ### 5.1 方向 A 第二轮：口径判定 Arbiter —— 已完成
 
-- 产出：python/econ_core/arbiter.py + 报告落盘 data/validated/arbiter/（**6 对** + _index.json）
-- 实测差异读 cross_check/*.json **不重跑取数**；高影响 unknown -> 人工复核，低影响 unknown -> 保留原判定并记 knowledge_gaps；alignment 记画像与实测是否同调（见 5.4）
+- 产出：python/econ_core/arbiter.py + 报告落盘 data/validated/arbiter/（**6 对** + _index.json）；实测差异读 cross_check/*.json **不重跑取数**；高影响 unknown -> 人工复核，低影响 unknown -> 保留原判定；alignment 记画像与实测是否同调（见 5.4）
 
 ### 5.2 方向 A 第三轮：可信度评分 —— 已完成
 
 - 产出：python/econ_core/credibility.py + 报告落盘 data/validated/credibility/（11 条 + _index.json）
-- 五维加权：Expertise 0.25 / Provenance 0.20 / Timeliness 0.10 / Transparency 0.15 / Coherence 0.30 -> 0-100 分 + high/medium/low
-- 当前分布：8 high / 3 medium / 0 low；最高 nbs|surveyed_unemployment 95.5，最低 imf|NGDP_RPCH 77.25。两条只用于对比、未落盘的序列 provenance 只有 30（没有 series_file）
+- 五维加权：Expertise 0.25 / Provenance 0.20 / Timeliness 0.10 / Transparency 0.15 / Coherence 0.30 -> 0-100 分 + high/medium/low。当前 **12 条**：9 high / 3 medium；最高 nbs|surveyed_unemployment 95.5，最低 imf|NGDP_RPCH 77.25；两条只对比不落盘的序列 provenance 只有 30（没有 series_file）
 
 ### 5.3 方向 D 与之后的待办
 
 - **方向 D 已完成四轮**：① HTML 质量报告（8 节）② 数据血缘 + 真实门禁状态 ③ 修 export 的 alias 重复 ④ **图表内联（报告自包含，断网可看）**
 - **方向 D 后续（可选）**：导出 PDF / 把报告挂到 CI（CI 用 `report.py --test --offline` 可复现，但要**先预热缓存**：冷检出没有 raw 存档，首次仍得联网拉一次 Plotly；门禁本身仍用不带 --offline 的 `report.py --test`）
 - **方向 A 第四轮（可选）**：拼接断点检查 / PROV-JSON 溯源导出 —— 还没开始；注意系统至今**从未真正拼接**过序列，断点检查暂时没有对象
-- **方向 C（下一轮主线）**：横向加源，范围锁定「一个源 + 一个指标」——把 **CPI** 接进交叉验证（当前 3 条 CPI 序列零验证，占落盘序列的 1/3）
+- **方向 C 第一轮：FRED CPI —— 已完成（本轮）**：NBS「上年=100」vs FRED/OECD 10 年全部落「一致」档（最大 0.081 pp）。但 FRED 的原始数据来自 NBS（OECD 转述），**一致性只证明转述无误**
+- **方向 C 第二轮（下一步）**：再加一个源，并补 **arbiter 的形状识别**——`arbiter._adapt` 现在是**按硬编码序列对**写形状的（nbs_vs_imf / registered_vs_imf_pp / max_abs_diff_pp），所以 CPI 这对进不了 arbiter（仍是 6 对 + 1 条 warning）。要变成 7 对必须改 arbiter，本轮约束禁止
 - **方向 B（已暂停，需单独立项）**：桌面版装配链路。实测本会话真正生效的是 .dsh/econ-harvester.patch.yml 的 global insert，不是 preset 的 persona；共有三层注册机制、两份 preset 副本
 - **落地插值**：当前 true_gap = 0 例，所以插值实现故意留空（出现 interpolate 会抛 NotImplementedError）。等真遇到上游序列中断再实现，并同步补回归
 
 ### 5.4 已知的小尾巴
 
 - aggregated_from_months 只存在于 validated / processed 的 JSON 层，**不在 CSV / SQLite 里**（输出层 14 列是定案集合，export.py 未改）。要它可见就追加为第 15 列，或折进 missing_evidence
-- compare-gdp-3way 的 timeout 已放宽到 420s，但实测波动大（16.5s -> 85.1s），若再变慢要考虑拆项
-- arbiter 的 verdict 与 recommended_action 可能不同调（gdp × imf|NGDPD：画像=可桥接，实测=noise/splice）。两个字段各自独立、不强行统一，但已用 alignment=profile_stricter 显式记录；要真正统一得改 source_profiler 的归因规则
+- compare-gdp-3way 的 timeout 已放宽到 420s，但实测波动大（16.5s -> 85.1s -> 74.1s），若再变慢要考虑拆项；**arbiter 的 verdict 与 recommended_action 可能不同调**（gdp × imf|NGDPD：画像=可桥接，实测=noise/splice）——已用 alignment=profile_stricter 显式记录，要真正统一得改 source_profiler 的归因规则
 
 ---
 
@@ -402,16 +406,18 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 | 文件 | 一句话职责 |
 |---|---|
-| run-all-checks.py | 门禁总入口：顺序跑 19 项检查，失败即停；支持逐检查 timeout 覆盖 |
+| run-all-checks.py | 门禁总入口：顺序跑 21 项检查，失败即停；支持逐检查 timeout 覆盖 |
 | check-cli-envelope.py | 契约测试：真跑 10 个子命令（11 用例），按 R1-R11 校验 stdout 信封；超时 420s |
 | smoke-nbs-adapter.mjs | NBS 插件冒烟：桩替换 execFile，验证 argv 与必填校验 |
 | smoke-worldbank-adapter.mjs | World Bank 插件冒烟（含 wantArgv 精确比对） |
 | smoke-imf-adapter.mjs | IMF 插件冒烟 |
+| smoke-fred-adapter.mjs | FRED 插件冒烟（含 start/end 可选参数的 argv 拼装） |
 | verify-preset.mjs | preset 装配校验（不起 DSH 服务）：ESM 加载、cordis 激活/卸载、YAML 形状、相对路径解析 |
 | compare-gdp.py | NBS vs World Bank 中国 GDP（首个交叉验证，结论：逐位相同） |
 | compare-gdp-3way.py | NBS vs WB vs IMF 三方（统一到亿美元；汇率取 WB PA.NUS.FCRF） |
 | compare-gdp-real.py | NBS GDP 指数 vs IMF NGDP_RPCH 实际增速（无汇率污染口径） |
 | compare-unemployment.py | 登记失业率 / 调查失业率 / IMF LUR 三方（百分点阈值） |
+| compare-cpi.py | CPI 交叉验证：NBS「上年=100」vs FRED/OECD（年均值转同比，阈值 0.3/1.0/2.0 pp） |
 | scan-missing.py | 缺失扫描：声明式清单 + data/validated 落盘扫描，产出 missing_report.json（含两条已知断言） |
 | materialize-validated.py | 把声明式清单落盘 data/validated/（复用 scan-missing 的清单，不复制） |
 | run-fill-strategy.py | 一键 validated -> processed；内置 raw 缓存快照对比证明脱网 |
@@ -426,6 +432,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 | src/plugins/nbs-adapter.js | 四个 nbs_* DSH 工具（薄壳转发 nbs_client_cli） |
 | src/plugins/worldbank-adapter.js | 三个 wb_* DSH 工具 |
 | src/plugins/imf-adapter.js | 三个 imf_* DSH 工具 |
+| src/plugins/fred-adapter.js | 两个 fred_* DSH 工具（fetch-series / list-search） |
 | .dsh/.agent-presets/econ-harvester/agent.cordis.yml | preset 的插件行清单（三个 adapter + persona + shell + 文件系统），用相对路径 |
 | .dsh/.agent-presets/econ-harvester/preset.yml | preset 名称与描述（要点明装配了 NBS + World Bank + IMF 三套工具） |
 | .dsh/econ-harvester.patch.yml | 用绝对路径把三个 adapter 作为 global insert 注入宿主组合 |
@@ -433,18 +440,15 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 家目录另有一份镜像（桌面版读取）：C:\Users\user\.dsh\.agent-presets\econ-harvester\ 下的 agent.cordis.yml 与 preset.yml。两份都要维护，家目录那份用绝对路径。
 
-### 6.4 python/_probes/ —— 逆向考古脚本（不参与生产链路，只读证据，不要删）
+### 6.4 数据目录（data/ 下内容全部被 .gitignore 忽略，只保留 .gitkeep）
 
-- README.md —— 18 个 probe_*.py 的索引、每个的结论、缓存键缺陷的已知观察
-- probe_*.py（实测 18 个）—— 端点发现 / 参数语义 / da 来源 / 缓存键缺陷 / 修复回归
-
-### 6.5 数据目录（data/ 下内容全部被 .gitignore 忽略，只保留 .gitkeep）
+python/_probes/ 下另有 18 个 probe_*.py（NBS 接口考古证据）与 README.md，不参与生产链路、**只读不要删**。
 
 | 目录 | 内容 |
 |---|---|
 | data/raw/_http_cache/ | HTTP 原文存档（.bin 加 .meta.json），所有结论的最终证据 |
 | data/parsed/{nbs,worldbank,imf}/ | 按请求指纹的解析结果 |
-| data/validated/{nbs,worldbank,imf}/ | 长表（9 条声明式序列），materialize-validated 的产物 |
+| data/validated/{nbs,worldbank,imf,fred}/ | 长表（10 条声明式序列），materialize-validated 的产物 |
 | data/validated/missing_report.json | 缺失分类总报告（scan-missing 产物） |
 | data/validated/{arbiter,credibility}/ | 口径判定报告（6 对）/ 可信度评分报告（11 条） |
 | data/validated/cross_check/ | 三个对比脚本的结果 JSON |
@@ -455,10 +459,9 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 | 文件 | 一句话职责 |
 |---|---|
-| PROJECT_STATE.md | 本文件 |
 | package.json | 声明 type: module，使 .mjs / .js 插件按 ESM 加载（不要删） |
-| pip_sandbox_install.py | 本沙箱环境的 pip 安装包装，装 pyyaml / pandas / pyarrow 用它 |
-| .gitignore | 忽略 .venv / .tools / node_modules，以及 data 下五个子目录的内容 |
+| pip_sandbox_install.py | 本沙箱环境的 pip 安装包装（装过 pyyaml / jinja2 / pandas / pyarrow） |
+| .gitignore | 忽略 .venv / .tools / node_modules 与 data 下五个子目录的内容 |
 
 ---
 
@@ -473,24 +476,23 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
        cd D:\universe\econ-data-harvester
        .\.venv\Scripts\python.exe tools\run-all-checks.py
 
-   期望 19/19 PASS，exit 0。若不是 19/19，先定位是哪一项退化了，不要继续叠加改动。
-4. 报告状态：门禁结果、git status、当前数据规模（9 条声明式序列 / 142 行 / 10 缺失行），然后停下等指令
+   期望 21/21 PASS，exit 0。若不是 21/21，先定位是哪一项退化了，不要继续叠加改动。
+4. 报告状态：门禁结果、git status、当前数据规模（10 条声明式序列 / 152 行 / 10 缺失行），然后停下等指令
 
 ### 7.1 报告模板（建议照抄）
 
-    门禁：19/19 PASS（exit 0）
+    门禁：21/21 PASS（exit 0）
     working tree：<git status --short 的内容>
-    数据：9 条声明式序列 / 142 行 / 10 缺失行（按行：series_start 5, discontinued 3, not_yet_published 2, true_gap 0）
+    数据：10 条声明式序列 / 152 行 / 10 缺失行（按行：series_start 5, discontinued 3, not_yet_published 2, true_gap 0）
     下一步待办：方向 D 后续（可选）「图表内联 / 导出 PDF / 挂 CI」
 
 ### 7.2 改动后的固定动作
 
-- 开工前自检：pwsh 报 ACL 故障见 3.7；import yaml / Jinja2 见 3.6；data/validated 为空则先跑 materialize-validated
-
-1. 跑完整门禁，确认仍 19/19（新增检查要同步加进 CHECKS 与 docstring 编号）
-2. 新增序列 -> 补 source_profiles.yaml 条目（否则 profiler 抛 KeyError）
-3. 改契约/分类/字段名 -> 同步更新本文件的第 2 节与第 3 节
-4. 不要把 data/ 下的产物提交进 git（它们已被忽略）；不要把 raw 存档删掉（那是证据链）
+1. 开工前自检：pwsh 报 ACL 故障见 3.7；import yaml / Jinja2 见 3.6；data/validated 为空则先跑 materialize-validated
+2. 跑完整门禁，确认仍 21/21（新增检查要同步加进 CHECKS 与 docstring 编号）
+3. 新增序列 -> 补 source_profiles.yaml 条目（否则 profiler 抛 KeyError）
+4. 改契约/分类/字段名 -> 同步更新本文件的第 2 节与第 3 节
+5. 不要把 data/ 下的产物提交进 git（它们已被忽略）；不要把 raw 存档删掉（那是证据链）
 
 ---
 
