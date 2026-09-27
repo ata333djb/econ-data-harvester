@@ -23,6 +23,7 @@
 4. python -m econ_core.normalize --test                （规范化层自检）
 5. python -m econ_core.cross_validation --test         （交叉验证自检）
 6. python tools/compare-gdp.py                         （NBS vs World Bank 端到端）
+7. python tools/compare-gdp-3way.py                    （NBS vs WB vs IMF 三方交叉验证）
 
 约定
 ----
@@ -92,6 +93,7 @@ CHECKS: list[Check] = [
     Check("cross_validation --test", "python",
           ["-m", "econ_core.cross_validation", "--test"]),
     Check("compare-gdp", "python", ["tools/compare-gdp.py"]),
+    Check("compare-gdp-3way", "python", ["tools/compare-gdp-3way.py"]),
 ]
 
 # --------------------------------------------------------------------------- #
