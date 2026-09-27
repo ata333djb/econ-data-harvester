@@ -22,16 +22,17 @@
 3. node tools/smoke-imf-adapter.mjs                    （插件 argv 拼装，桩）
 4. python tools/check-cli-envelope.py                  （真跑 CLI 的信封契约）
 5. python -m econ_core.missing --test                  （缺失分类自检，纯离线 0.1s）
-6. python -m econ_core.normalize --test                （规范化层自检）
-7. python -m econ_core.cross_validation --test         （交叉验证自检）
-8. python tools/compare-gdp.py                         （NBS vs World Bank 端到端）
-9. python tools/compare-gdp-3way.py                    （NBS vs WB vs IMF 三方交叉验证）
-10. python tools/compare-gdp-real.py                    （NBS vs IMF 实际增速，无汇率污染）
-11. python tools/compare-unemployment.py               （失业率三方：登记/调查 vs IMF LUR）
-12. python tools/scan-missing.py                       （缺失检测与分类）
-13. python tools/materialize-validated.py              （声明式清单落盘 validated）
-14. python tools/run-fill-strategy.py                  （填补策略执行器：只 leave_null/wait）
-15. python tools/export.py                             （导出 CSV + SQLite + 数据字典）
+6. python -m econ_core.source_profiler --test          （来源画像自检，纯离线 0.2s）
+7. python -m econ_core.normalize --test                （规范化层自检）
+8. python -m econ_core.cross_validation --test         （交叉验证自检）
+9. python tools/compare-gdp.py                         （NBS vs World Bank 端到端）
+10. python tools/compare-gdp-3way.py                    （NBS vs WB vs IMF 三方交叉验证）
+11. python tools/compare-gdp-real.py                    （NBS vs IMF 实际增速，无汇率污染）
+12. python tools/compare-unemployment.py               （失业率三方：登记/调查 vs IMF LUR）
+13. python tools/scan-missing.py                       （缺失检测与分类）
+14. python tools/materialize-validated.py              （声明式清单落盘 validated）
+15. python tools/run-fill-strategy.py                  （填补策略执行器：只 leave_null/wait）
+16. python tools/export.py                             （导出 CSV + SQLite + 数据字典）
 
 约定
 ----
@@ -103,6 +104,9 @@ CHECKS: list[Check] = [
     Check("check-cli-envelope", "python", ["tools/check-cli-envelope.py"], timeout_s=420),
     # missing --test 是纯离线自检（0.1s），覆盖四种缺失分类，最便宜的门禁项，放前面
     Check("missing --test", "python", ["-m", "econ_core.missing", "--test"]),
+    # source_profiler --test 同样纯离线（读知识库 YAML + 读已有 validated 文件），0.2s 级
+    Check("source_profiler --test", "python",
+          ["-m", "econ_core.source_profiler", "--test"]),
     Check("normalize --test", "python", ["-m", "econ_core.normalize", "--test"]),
     Check("cross_validation --test", "python",
           ["-m", "econ_core.cross_validation", "--test"]),

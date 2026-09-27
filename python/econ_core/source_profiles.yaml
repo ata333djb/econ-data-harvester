@@ -1,0 +1,342 @@
+# source_profiles.yaml —— 来源画像知识库（人工编纂）
+#
+# 定位
+# ----
+# 这是**人工编纂**的知识，不靠自动抽取。数据层里只有 indicator_name / unit /
+# raw_cache 这类表层字段；"统计方法"（行政记录 vs 抽样调查）、"覆盖范围"、
+# "可追溯性"这些必须人工写进去。
+#
+# 硬规则
+# ------
+# * 查不到官方明确定义的字段一律写 `unknown`，**不要编**。unknown 表示"未找到明确依据"，
+#   不等于"该项没有"。
+# * indicators 的 key **精确匹配 series_key**（大小写、括号、空格都要一致）。
+# * 只有确实核验过的才写具体值；核验依据写进 source_notes / references。
+#
+# 结构
+# ----
+#   meta:        知识库自身元信息
+#   publishers:  发布机构
+#   indicators:  指标口径（含别名 alias_of）
+#   fields:      长表列的字段语义
+
+meta:
+  updated: "2026-09-27"
+  maintainer: "人工维护；改动请附官方文档链接"
+  unknown_meaning: "未找到明确的官方依据（不是'没有'）"
+  caveat: "本知识库只覆盖本项目已接入的序列；新增序列必须补条目，否则 source_profiler 会抛 KeyError"
+
+publishers:
+  nbs:
+    key: nbs
+    name: 国家统计局
+    full_name: 国家统计局（National Bureau of Statistics of China）
+    country: CHN
+    authority_level: official
+    data_url: https://data.stats.gov.cn/
+    main_url: https://www.stats.gov.cn/
+    license: 政府统计信息公开。按《中华人民共和国统计法》及其实施条例发布；未见明确的开源许可条款，商业再分发前请自行核实
+    license_url: unknown
+    update_frequency: monthly
+    revision_policy: "年度 GDP 走「初步核算 -> 初步核实 -> 最终核实」三步修订；月度/年度指标通常在下一次发布时回溯修订历史值"
+    notes: "本项目走新版数据平台 data.stats.gov.cn/dg/website 的后端接口取数（旧版 easyquery.htm 已被 WAF 封禁）"
+
+  worldbank:
+    key: worldbank
+    name: 世界银行
+    full_name: 世界银行（World Bank Group）
+    country: null
+    authority_level: international
+    data_url: https://data.worldbank.org/
+    main_url: https://www.worldbank.org/
+    license: 开放数据，多数指标为 CC BY 4.0（World Bank Open Data 条款）
+    license_url: https://datacatalog.worldbank.org/public-licenses
+    update_frequency: quarterly
+    revision_policy: "随来源机构（各国官方统计、国际组织）的修订同步更新；世界银行本身不对中国 GDP 做独立修订"
+    notes: "World Bank 是**二次汇编方**：中国 GDP 复述 NBS 修订后的数字。实测其 NY.GDP.MKTP.CN 与本项目 NBS 序列逐字节相同"
+
+  imf:
+    key: imf
+    name: 国际货币基金组织
+    full_name: 国际货币基金组织（International Monetary Fund）
+    country: null
+    authority_level: international
+    data_url: https://www.imf.org/external/datamapper/
+    main_url: https://www.imf.org/
+    license: IMF 数据公开可用；再分发须署名 IMF 并附其使用条款
+    license_url: https://www.imf.org/external/terms.htm
+    update_frequency: irregular
+    revision_policy: "WEO 每年两次（4 月 / 10 月）整体重算并回溯修订历史值，并公布未来 5-6 年预测；本项目实测 CHN 覆盖到 2031（含预测）"
+    notes: "DataMapper API 端点 api/v1。**实测 Akamai 会 403 掉 Chrome UA，只放行朴素 UA**（见 imf_client 模块注释）"
+
+indicators:
+
+  "nbs|gdp|cny_100m":
+    display_name: "国内生产总值（现价，亿元）"
+    definition: "一个国家或地区所有常住单位在一定时期内生产活动的最终成果，按当年价格计算；遵循 SNA 2008 核算框架。"
+    statistical_method: "国民经济核算（汇总汇编）"
+    collecting_agency: "国家统计局（国民经济核算司）"
+    coverage: "中国大陆（不含香港、澳门、台湾）"
+    population_scope: "全部常住单位的经济活动总量（非人口口径）"
+    unit: "亿元"
+    frequency: annual
+    start_year: unknown
+    start_year_note: "本项目取数窗口为 2015-2024；官方年度序列早于此，具体起始年未核验"
+    discontinued_after: null
+    revision_policy: "初步核算（次年 1 月前后）-> 初步核实 -> 最终核实；每次修订都会改写历史值"
+    source_notes: "取自年度数据「国内生产总值 (亿元)」，indicator_id=db8e5a86c08246e79b1b11251927e740。**注意 cid 参数被 NBS 后端忽略**（见 nbs_client docstring 实测）。实测与 World Bank NY.GDP.MKTP.CN 逐字节相同。"
+    comparability:
+      "with_worldbank|NY.GDP.MKTP.CN": high
+      "with_imf|NGDPD": medium
+    references:
+      - https://data.stats.gov.cn/
+      - https://www.stats.gov.cn/
+
+  "nbs|cpi|全国居民消费价格指数（上年=100） (%)":
+    display_name: "居民消费价格指数（全国，上年=100）"
+    definition: "反映一定时期内城乡居民所购买的生活消费品和服务项目价格变动趋势和程度的相对数，以上年同期为 100。"
+    statistical_method: "抽样调查（定点、定时、定人直接采价后加权汇总）"
+    collecting_agency: "国家统计局（价格统计采集系统）"
+    coverage: "全国"
+    population_scope: "城乡居民家庭消费"
+    unit: "指数（上年=100）"
+    frequency: annual
+    start_year: unknown
+    discontinued_after: null
+    revision_policy: unknown
+    source_notes: "来自默认指标接口 new/getDefaultIndicData?code=21 的 yData；yData[].value 是**字符串数组**（如 \"101.4\"），末位可能是 null。indicator_id 由 du + yData 序号构成（du 是数据单位 id，同一次响应的三条序列共用）。"
+    comparability: {}
+    references:
+      - https://data.stats.gov.cn/
+
+  "nbs|cpi|城市居民消费价格指数（上年=100） (%)":
+    display_name: "居民消费价格指数（城市，上年=100）"
+    definition: "同全国口径，但只覆盖城市居民消费的消费品与服务项目价格变动。"
+    statistical_method: "抽样调查（定点、定时、定人直接采价后加权汇总）"
+    collecting_agency: "国家统计局（价格统计采集系统）"
+    coverage: "全国城市"
+    population_scope: "城市居民家庭消费"
+    unit: "指数（上年=100）"
+    frequency: annual
+    start_year: unknown
+    discontinued_after: null
+    revision_policy: unknown
+    source_notes: "与全国口径**仅覆盖范围不同**。实测 2025 年该序列值为 null 而全国已发布 -> missing 分类 not_yet_published（不是停更）。"
+    comparability: {}
+    references:
+      - https://data.stats.gov.cn/
+
+  "nbs|cpi|农村居民消费价格指数（上年=100） (%)":
+    display_name: "居民消费价格指数（农村，上年=100）"
+    definition: "同全国口径，但只覆盖农村居民消费的消费品与服务项目价格变动。"
+    statistical_method: "抽样调查（定点、定时、定人直接采价后加权汇总）"
+    collecting_agency: "国家统计局（价格统计采集系统）"
+    coverage: "全国农村"
+    population_scope: "农村居民家庭消费"
+    unit: "指数（上年=100）"
+    frequency: annual
+    start_year: unknown
+    discontinued_after: null
+    revision_policy: unknown
+    source_notes: "与全国口径**仅覆盖范围不同**。实测 2025 年该序列值为 null 而全国已发布 -> missing 分类 not_yet_published。"
+    comparability: {}
+    references:
+      - https://data.stats.gov.cn/
+
+  "nbs|registered_unemployment":
+    display_name: "城镇登记失业率"
+    definition: "城镇登记失业人员与城镇从业人员之和的比率。分子是报告期末在公共就业服务机构**主动办理了失业登记**、有劳动能力并要求就业的城镇人员 —— 没有来登记的人（即使实际无业）不计入。"
+    statistical_method: "行政记录（失业登记台账逐级汇总）"
+    collecting_agency: "人力资源和社会保障部（各地公共就业服务机构登记、逐级上报）"
+    coverage: "城镇；仅覆盖到公共就业服务机构办理了失业登记的人员"
+    population_scope: "城镇登记失业人员（法定劳动年龄内、有劳动能力、无业且要求就业并已登记求职者）"
+    unit: "%"
+    frequency: annual
+    start_year: unknown
+    discontinued_after: 2021
+    revision_policy: unknown
+    source_notes: "**实测 2022/2023/2024 的 v 是空串**（年度库仍留该节点但不更新）-> missing 分类 discontinued，建议动作 leave_null。与调查失业率不可直接拼接：两者相差约 1.1-1.6 pp，且方向稳定（登记更低）。"
+    divergence_hint: "行政记录只统计主动登记者 —— 没到公共就业服务机构办理失业登记的人（即使实际无业）不计入分子，所以它系统性低于抽样调查口径"
+    comparability:
+      "with_nbs|surveyed_unemployment": low
+      "with_imf|LUR": low
+    references:
+      - https://data.stats.gov.cn/
+      - https://www.mohrss.gov.cn/
+
+  "nbs|surveyed_unemployment":
+    display_name: "全国城镇调查失业率"
+    definition: "按国际劳工组织（ILO）标准，通过劳动力抽样调查得到的城镇常住人口中失业人口占劳动力（就业人口 + 失业人口）的比重。失业指调查参考周内没有工作、有就业意愿且正在找工作。"
+    statistical_method: "抽样调查（月度劳动力调查）"
+    collecting_agency: "国家统计局（月度劳动力调查）"
+    coverage: "城镇（常住人口口径，含外来户籍劳动力 —— 实测有「全国城镇外来户籍劳动力失业率」分项）"
+    population_scope: "城镇 16 岁及以上常住人口中的劳动力"
+    unit: "%"
+    frequency: monthly
+    aggregation: "本项目按**年均值**聚合到年（行上有 aggregated_from_months 标明参与平均的月数）"
+    start_year: 2018
+    start_year_note: "实测依据：请求 2017-01 起也只返回 2018-01 起（不是知识库推测）"
+    discontinued_after: null
+    revision_policy: unknown
+    source_notes: "**只存在于月度树（code=1）**，年度树里没有。与登记失业率不是同一口径，不可直接拼接。"
+    comparability:
+      "with_imf|LUR": high
+      "with_nbs|registered_unemployment": low
+    references:
+      - https://data.stats.gov.cn/
+
+  "worldbank|NY.GDP.MKTP.CN":
+    display_name: "GDP (current LCU) —— 现价本币"
+    definition: "GDP at purchaser's prices is the sum of gross value added by all resident producers in the economy plus any product taxes and minus any subsidies not included in the value of the products. Data are in current local currency.（World Bank 官方口径转述）"
+    statistical_method: "汇总汇编（二次汇编：取自各国官方统计与国际组织，World Bank 不独立采集）"
+    collecting_agency: "中国国家统计局（原始采集）；World Bank 负责汇编与发布"
+    coverage: "中国大陆（CHN）"
+    population_scope: "同 NBS GDP（经济活动总量，非人口口径）"
+    unit: "元（本币 LCU）"
+    frequency: annual
+    start_year: unknown
+    discontinued_after: null
+    revision_policy: "随各国官方修订同步；World Bank 不独立修订中国 GDP"
+    source_notes: "**实测与本项目 NBS 序列逐字节相同**（同一 raw 存档 sha256[:12]）——即 World Bank 复述 NBS 修订后的数字，**不是独立来源**。因此 NBS vs World Bank 的交叉验证没有信息量。"
+    comparability:
+      "with_nbs|gdp|cny_100m": high
+      "with_imf|NGDPD": medium
+    references:
+      - https://data.worldbank.org/indicator/NY.GDP.MKTP.CN
+
+  "imf|NGDPD":
+    display_name: "GDP, current prices（现价美元，十亿）"
+    definition: "Gross domestic product is the most commonly used single measure of a country's overall economic activity. It represents the total value at current prices of final goods and services produced within a country during a specified time period.（IMF DataMapper /v1/indicators 返回的 description 原文）"
+    statistical_method: "汇总汇编（IMF 基于各国官方数据自行换算为美元并做国际可比性调整）"
+    collecting_agency: "IMF Research Department（WEO 团队）；原始数据来自中国国家统计局"
+    coverage: "中国（CHN）"
+    population_scope: "同 GDP（经济活动总量）"
+    unit: "十亿美元（billions of U.S. dollars）"
+    frequency: annual
+    start_year: 1980
+    start_year_note: "实测数据起点为 1980；这是**数据起点**，非官方口径起始年"
+    discontinued_after: null
+    revision_policy: "WEO 每年 4 月 / 10 月两次重算，回溯修订历史值"
+    source_notes: "**含预测值**：实测 CHN 覆盖 1980-2031，其中 2025 及以后为预测；本项目按 2015-2024 窗口截断。注意 IMF 的 unit 字段在数据端点里为空串，单位写在 indicator 名里。"
+    comparability:
+      "with_nbs|gdp|cny_100m": medium
+      "with_worldbank|NY.GDP.MKTP.CN": medium
+    references:
+      - https://www.imf.org/en/Publications/WEO
+      - https://www.imf.org/external/datamapper/api/v1/indicators
+
+  "imf|LUR":
+    display_name: "Unemployment rate（失业率，%）"
+    definition: "The number of unemployed persons as a percentage of the total labor force.（IMF DataMapper /v1/indicators 返回的 description 原文）"
+    statistical_method: "抽样调查（ILO 定义；IMF 采用各国官方劳动力调查数据并做国际可比性协调）"
+    collecting_agency: "中国国家统计局（原始调查）；ILO / IMF 做口径协调"
+    coverage: "中国全国（对应城镇调查口径）"
+    population_scope: "劳动力人口（就业 + 失业）中的失业者"
+    unit: "%"
+    frequency: annual
+    start_year: 2017
+    start_year_note: "实测数据起点为 2017（比 NGDPD 的 1980 晚得多）"
+    discontinued_after: null
+    revision_policy: "同 WEO：每年 4 月 / 10 月更新，含预测至 2031"
+    source_notes: "**实测与 NBS 调查失业率几乎重合**（7/7 年差异 ±0.05 pp 以内）——说明 IMF 的中国 LUR 用的是**调查口径**，不是登记口径。这正是 explain_divergence 判它「同口径、可拼接」的依据。"
+    divergence_hint: "与 NBS 调查失业率同源口径，残差属舍入/修订级噪声"
+    comparability:
+      "with_nbs|surveyed_unemployment": high
+      "with_nbs|registered_unemployment": low
+    references:
+      - https://www.imf.org/en/Publications/WEO
+
+  "NBS|000000000000|db8e5a86c08246e79b1b11251927e740":
+    alias_of: "nbs|gdp|cny_100m"
+    source_notes: "这是 normalize 自动推导出来的 series_key（source|region_code|indicator_id 的大写形式），与 nbs|gdp|cny_100m 是**同一条序列**，只是键形不同。保留此别名是为了让历史落盘文件与知识库能对上。"
+
+# 口径「家族」——供对比使用
+# ------------------------
+# statistical_method / coverage 是**自由文本**，措辞不同不代表口径不同
+# （例如「抽样调查（月度劳动力调查）」与「抽样调查（ILO 定义…）」是同一类方法）。
+# 直接做字符串比较会产生假差异，所以 compare_profiles 优先用这里的家族值判断"是不是同一类"，
+# 没有家族值才退回字符串比较。家族值按 series_key 索引（alias 会先解析到规范键）。
+families:
+  "nbs|gdp|cny_100m":
+    method: 国民经济核算
+    coverage: 中国大陆
+    scope: 经济活动总量
+  "nbs|cpi|全国居民消费价格指数（上年=100） (%)":
+    method: 抽样调查
+    coverage: 全国
+    scope: 城乡居民家庭消费
+  "nbs|cpi|城市居民消费价格指数（上年=100） (%)":
+    method: 抽样调查
+    coverage: 全国城市
+    scope: 城市居民家庭消费
+  "nbs|cpi|农村居民消费价格指数（上年=100） (%)":
+    method: 抽样调查
+    coverage: 全国农村
+    scope: 农村居民家庭消费
+  "nbs|registered_unemployment":
+    method: 行政记录
+    coverage: 城镇登记失业人员
+    scope: 城镇登记失业人员
+  "nbs|surveyed_unemployment":
+    method: 抽样调查
+    coverage: 城镇常住人口
+    scope: 城镇劳动力
+  "worldbank|NY.GDP.MKTP.CN":
+    method: 汇总汇编
+    coverage: 中国大陆
+    scope: 经济活动总量
+  "imf|NGDPD":
+    method: 汇总汇编
+    coverage: 中国大陆
+    scope: 经济活动总量
+  "imf|LUR":
+    method: 抽样调查
+    coverage: 城镇常住人口
+    scope: 城镇劳动力
+
+
+fields:
+  source:
+    meaning: "数据源标识（nbs / worldbank / imf，统一小写）"
+    origin: "normalize 的 SOURCE / SOURCE_WB 常量，或各 normalizer 的 source_meta.source"
+  series_key:
+    meaning: "序列键。形如 source|region_code|indicator_id（自动推导）或 source|family|name（声明式清单）"
+    origin: "tools/scan-missing.py 的声明式清单；落盘文件的 series_key 字段优先，否则 missing._auto_series_key 推导"
+  region_code:
+    meaning: "地区代码。NBS 是 12 位数字（000000000000=全国），World Bank / IMF 是 ISO3（CHN）"
+  region_name:
+    meaning: "地区名称（NBS 不返回，由调用方传入；World Bank / IMF 从响应取）"
+  indicator_id:
+    meaning: "指标标识。NBS 是树节点 _id；World Bank / IMF 是指标代码；CPI 是 du#序号（du 为数据单位 id，多条序列共用）"
+  indicator_name:
+    meaning: "指标名称。可能为 null（实测 NBS 2024 年 GDP 行的 i_name 为 null），normalize 会用同 indicator_id 的名称补齐"
+  period:
+    meaning: "标准化观测期。年度 2015 / 月度 2015-01 / 季度 2015-Q1"
+  period_type:
+    meaning: "annual | monthly | quarterly"
+  value:
+    meaning: "观测值（float）。**缺失行为 null / 空串 / NULL，本项目不做任何插值**"
+  unit:
+    meaning: "单位。NBS 用「亿元 / % / 指数(上年=100) / 无」；World Bank 的 unit 字段常为空串（单位写在指标名里）；IMF 由知识库补（如 十亿美元）"
+  fetched_at:
+    meaning: "抓取时刻（ISO8601 UTC），来自 http_client 落盘时的记录"
+  raw_cache:
+    meaning: "原始响应存档路径（data/raw/_http_cache/*.bin），可回溯 HTTP 原文"
+  row_sha16:
+    meaning: "行级指纹：本行规范化 JSON（不含 row_sha16 自身）的 sha256 前 16 位。任何字段变动都会改变指纹"
+  raw_fields:
+    meaning: "原始记录中未被消费的字段（JSON 字符串）。NBS 保留 dt/dt_name/du/i/i_name/code；World Bank 保留 date/country/decimal 等；补齐行带 padded=true"
+  missing_classification:
+    meaning: "缺失分类：true_gap | not_yet_published | discontinued | series_start"
+    origin: "econ_core.missing.classify_missing，由 fill_strategy 贴到行上"
+  missing_action:
+    meaning: "建议动作：interpolate | wait | leave_null | manual_review"
+    origin: "econ_core.fill_strategy.decide（当前数据集里没有 true_gap，所以只出现 leave_null / wait）"
+  missing_evidence:
+    meaning: "分类依据（人可读），例如「位于序列末尾，缺失 3 期（约 3.00 年）；达到 >=3 年的停更阈值」"
+  aggregated_from_months:
+    meaning: "非标准列（仅调查失业率有）：该年由几个月度观测算术平均得到"
+    origin: "tools/scan-missing.py 的月度->年均聚合；已参与 row_sha16 计算"
+
+
+

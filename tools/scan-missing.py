@@ -69,8 +69,8 @@ NBS_SUR = {"cid": "ee3b7046b390415b9b7745e3d16f6052",
            "tree_node": "3888eac6062945a79c8a27e5f13d4953",
            "root_id": "3c9c459384c74f578f3541b2198aac70"}
 WB_GDP = {"country": "CHN", "indicator": "NY.GDP.MKTP.CN", "date_range": "2015:2024"}
-IMF_SERIES = [("NGDPD", "GDP, current prices (十亿美元)"),
-              ("LUR", "Unemployment rate (%)")]
+IMF_SERIES = [("NGDPD", "GDP, current prices", "十亿美元"),
+              ("LUR", "Unemployment rate", "%")]
 
 
 def _parse(v: Any) -> Optional[float]:
@@ -96,6 +96,39 @@ def _nbs_rows(p: dict[str, Any], dts: list[str]) -> list[dict[str, Any]]:
     return normalize.normalize_observations(raw, meta)
 
 
+def _pad_to_window(rows: list[dict[str, Any]], window: list[str],
+                   period_type: str = "annual") -> list[dict[str, Any]]:
+    """把序列补齐到期望窗口：窗口内源数据没有观测行的期，补一行 value=None。
+
+    为什么要补：不补的话，缺口里"完全没有行"的那几期会被 fill_strategy **现场合成**
+    占位行（只有 period/value/缺失元数据），于是没有 row_sha16 —— 导出层的
+    "每行都有指纹"就做不到（实测 147/152）。补在 validated 层更诚实：
+    这些行有完整的指标元数据 + 指纹，且 raw_fields 里标了 padded=true 说明来历。
+
+    补行会改内容，所以 row_sha16 必须**重算**。
+    """
+    if not rows or not window:
+        return rows
+    have = {str(r.get("period")) for r in rows}
+    missing = [p for p in window if p not in have]
+    if not missing:
+        return rows
+    tpl = rows[0]
+    out = list(rows)
+    for p in missing:
+        row = dict(tpl)
+        row["period"] = p
+        row["period_type"] = period_type
+        row["value"] = None
+        row["raw_fields"] = json.dumps(
+            {"padded": True, "reason": "期望窗口内该期源数据没有观测行（补齐以便逐行可追溯）"},
+            ensure_ascii=False, sort_keys=True)
+        row["row_sha16"] = normalize._row_sha16(row)
+        out.append(row)
+    out.sort(key=lambda r: str(r.get("period")))
+    return out
+
+
 def build_declared() -> list[dict[str, Any]]:
     """构造声明式清单：每条 {label, rows, meta, expect(可选)}。"""
     out: list[dict[str, Any]] = []
@@ -107,19 +140,29 @@ def build_declared() -> list[dict[str, Any]]:
         "meta": {"expected_periods": Y_WINDOW, "series_key": "nbs|gdp|cny_100m"},
     })
 
-    # 2) NBS CPI（默认指标 code=21，宽表 -> 长表；每条 yData 一个序列）
+    # 2) NBS CPI（默认指标 code=21）—— **改走统一入口** normalize.normalize_cpi_wide
+    #    以前是就地手搓 {period, value}，导致没有 row_sha16 / indicator_id / unit。
     cpi = nbs_client.get_default_indicator(21)
-    xlabels = [str(x).replace("年", "") for x in (cpi.get("xData") or [])]
-    for i, y in enumerate(cpi.get("yData") or []):
-        name = str(y.get("name") or f"series{i}").strip()
-        # 注意：默认指标接口的 yData[].value 是**字符串**数组（如 "101.4"），
-        # 且末位可能是 null。必须过 normalize.parse_value，否则会被当成"全缺失"，
-        # 进而误判成 discontinued（实测踩过）。
-        rows = [{"period": p, "value": _parse(v)}
-                for p, v in zip(xlabels, (y.get("value") or []))]
+    cpi_meta = normalize.source_meta_from_parsed(
+        "getDefaultIndicData", {"code": 21}, region_name="全国")
+    cpi_rows = normalize.normalize_cpi_wide(cpi.get("xData"), cpi.get("yData"), {
+        "source": "nbs",
+        "region_code": REGION_CODE,
+        "region_name": "全国",
+        "catalog_id": cpi.get("catalogId"),
+        "catalog_name": cpi.get("catalogName"),
+        "fetched_at": cpi_meta.get("fetched_at", ""),
+        "raw_cache": cpi_meta.get("raw_cache", ""),
+    })
+    xlabels = sorted({str(r["period"]) for r in cpi_rows})
+    cpi_groups: dict[str, list[dict[str, Any]]] = {}
+    for r in cpi_rows:
+        cpi_groups.setdefault(str(r["indicator_name"]), []).append(r)
+    for name in sorted(cpi_groups):
         out.append({
-            "label": f"NBS CPI 居民消费价格指数[{name}] {xlabels[0]}-{xlabels[-1] if xlabels else '?'}",
-            "rows": rows,
+            "label": f"NBS CPI 居民消费价格指数[{name}] "
+                     f"{xlabels[0] if xlabels else '?'}-{xlabels[-1] if xlabels else '?'}",
+            "rows": cpi_groups[name],
             "meta": {"expected_periods": xlabels, "series_key": f"nbs|cpi|{name}"},
         })
 
@@ -132,14 +175,35 @@ def build_declared() -> list[dict[str, Any]]:
     })
 
     # 4) NBS 全国城镇调查失业率（月度 -> 年均值；实测 2018 起）
+    #    **月度行先过 normalize**（于是有 row_sha16 / unit / raw_cache / raw_fields），
+    #    再按年聚合；聚合行的 period/value 都变了，所以 row_sha16 必须**重算**，
+    #    并留下 aggregated_from_months 说明来源。
     monthly = [f"{y}{m:02d}MM" for y in range(2017, 2025) for m in range(1, 13)]
     mrows = _nbs_rows(NBS_SUR, monthly)
-    buckets: dict[str, list[float]] = {}
+    by_year: dict[str, list[dict[str, Any]]] = {}
     for r in mrows:
-        v = r.get("value")
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            buckets.setdefault(str(r["period"])[:4], []).append(float(v))
-    arows = [{"period": y, "value": sum(vs) / len(vs)} for y, vs in buckets.items()]
+        by_year.setdefault(str(r["period"])[:4], []).append(r)
+    arows: list[dict[str, Any]] = []
+    for year in sorted(by_year):
+        rs = by_year[year]
+        vals = [float(r["value"]) for r in rs
+                if isinstance(r.get("value"), (int, float))
+                and not isinstance(r.get("value"), bool)]
+        if not vals:
+            continue
+        row = dict(rs[0])                 # 以月度行为模板，继承 source/unit/raw_cache/fetched_at
+        row["period"] = year
+        row["period_type"] = "annual"
+        row["value"] = sum(vals) / len(vals)
+        row["aggregated_from_months"] = len(vals)
+        row["raw_fields"] = json.dumps(
+            {"aggregated_from_months": len(vals),
+             "months": [str(r["period"]) for r in rs],
+             "note": "由月度序列算术平均得到；row_sha16 已按聚合后的行重算"},
+            ensure_ascii=False, sort_keys=True)
+        row["row_sha16"] = normalize._row_sha16(row)   # 聚合后重算（用 missing/normalize 同一套指纹规则）
+        arows.append(row)
+    arows = _pad_to_window(arows, Y_WINDOW)          # 2015-2017 源数据没有观测行 -> 补 None 行
     out.append({
         "label": "NBS 全国城镇调查失业率 (%) 月均->年 2015-2024 窗口",
         "rows": arows,
@@ -160,15 +224,28 @@ def build_declared() -> list[dict[str, Any]]:
                  "series_key": f"worldbank|{WB_GDP['indicator']}"},
     })
 
-    # 6/7) IMF 两条
-    for code, desc in IMF_SERIES:
-        rows = [{"period": str(r["period"]), "value": r.get("value")}
-                for r in imf_client.fetch_indicator(code, "CHN")]
+    # 6/7) IMF 两条 —— **改走统一入口** normalize.normalize_imf_observations
+    #    （以前直通 {period, value}，所以没有 row_sha16 / indicator_id / indicator_name / unit）
+    for code, desc, unit in IMF_SERIES:
+        imf_meta = imf_client.last_meta()
+        raw_imf = imf_client.fetch_indicator(code, "CHN")
+        imf_meta = imf_client.last_meta()       # fetch 之后再取一次，拿本次的 raw_cache/fetched_at
         out.append({
             "label": f"IMF {code} {desc}",
-            "rows": rows,
+            "rows": normalize.normalize_imf_observations(raw_imf, {
+                "indicator": code,
+                "country": "CHN",
+                "indicator_name": desc,
+                "unit": unit,
+                "region_name": "China",
+                "source": "imf",
+                "fetched_at": imf_meta.get("fetched_at", ""),
+                "raw_cache": imf_meta.get("raw_cache", ""),
+            }),
             "meta": {"expected_periods": Y_WINDOW, "series_key": f"imf|{code}"},
         })
+        # LUR 实测从 2017 起 -> 2015/2016 补 None 行（见 _pad_to_window 的说明）
+        out[-1]["rows"] = _pad_to_window(out[-1]["rows"], Y_WINDOW)
 
     return out
 

@@ -34,7 +34,7 @@ period           str      标准时间："2015" / "2020-01" / "2020-Q1"
 period_type      str      "annual" | "quarterly" | "monthly"
 value            float    数值（原始 ``v`` 转 float，空值 -> None）
 unit             str      单位，如 "亿元" / "%"
-source           str      固定 "NBS"
+source           str      固定 "nbs"（小写，见 SOURCE 常量注释）
 fetched_at       str      ISO8601 抓取时间
 raw_cache        str      raw 存档路径
 row_sha16        str      本行规范化后 JSON 的 sha256 前 16 位
@@ -98,6 +98,8 @@ __all__ = [
     "parse_value",
     "normalize_observations",
     "normalize_worldbank_observations",
+    "normalize_imf_observations",
+    "normalize_cpi_wide",
     "source_meta_from_parsed",
     "source_meta_from_parsed_worldbank",
     "write_validated",
@@ -113,13 +115,16 @@ __all__ = [
 # 常量
 # --------------------------------------------------------------------------- #
 
-SOURCE: str = "NBS"
+#: 数据源标识。**小写**：导出层要求 source 列去重后只有 nbs / worldbank / imf，
+#: 而本常量同时决定 normalize --test 写出的 validated 文件，所以在这里统一
+#: （而不是在每个调用点打补丁）。
+SOURCE: str = "nbs"
 
 #: nbs_client 的 parsed 落盘目录（用于回填 raw_cache / fetched_at）
 PARSED_NBS_DIR: Path = http_client.PROJECT_ROOT / "data" / "parsed" / "nbs"
 
 #: World Bank 数据源标识（第二阶段新增）
-SOURCE_WB: str = "WorldBank"
+SOURCE_WB: str = "worldbank"
 
 #: worldbank_client 的 parsed 落盘目录（用于回填 raw_cache / fetched_at）
 PARSED_WORLDBANK_DIR: Path = http_client.PROJECT_ROOT / "data" / "parsed" / "worldbank"
@@ -530,6 +535,164 @@ def normalize_worldbank_observations(raw_data: Iterable[dict[str, Any]],
         row["row_sha16"] = _row_sha16(row)
         rows.append(row)
 
+    return rows
+
+
+# --------------------------------------------------------------------------- #
+# IMF / CPI 统一入口（第四阶段新增；**不改上方任何现有函数**）
+# --------------------------------------------------------------------------- #
+
+def _mk_row(region_code: str, region_name: str, indicator_id: str, tree_node_id: str,
+            indicator_name: Any, period: str, period_type: str, value: Optional[float],
+            unit: str, source: str, fetched_at: str, raw_cache: str,
+            raw_fields: dict[str, Any],
+            extra: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """按与 normalize_observations **完全相同的 14 列顺序**组装一行，并算 row_sha16。
+
+    `extra` 里的键会追加在 14 列之后（例如聚合序列的 aggregated_from_months），
+    并且**参与指纹计算** —— 否则指纹与行内容就脱钩了。
+    """
+    row: dict[str, Any] = {
+        "region_code": region_code,
+        "region_name": region_name,
+        "indicator_id": indicator_id,
+        "tree_node_id": tree_node_id,
+        "indicator_name": indicator_name,
+        "period": period,
+        "period_type": period_type,
+        "value": value,
+        "unit": unit,
+        "source": source,
+        "fetched_at": fetched_at,
+        "raw_cache": raw_cache,
+        "row_sha16": "",
+        "raw_fields": json.dumps(raw_fields, ensure_ascii=False, sort_keys=True),
+    }
+    if extra:
+        row.update(extra)
+    row["row_sha16"] = _row_sha16(row)
+    return row
+
+
+def normalize_imf_observations(raw_data: Iterable[dict[str, Any]],
+                               source_meta: dict[str, Any]) -> list[dict[str, Any]]:
+    """把 IMF DataMapper 的 `[{"period","value"}]` 转成标准长表行。
+
+    与 `:func:normalize_worldbank_observations` 的差异：IMF 的记录只有 period/value
+    两个键，**指标元数据不在响应里**，所以 indicator_id / indicator_name / unit
+    必须由 `source_meta` 提供：
+
+    * `indicator` / `indicator_id` —— 指标代码，如 `NGDPD`
+    * `indicator_name` / `label` —— 指标名，如 `GDP, current prices`
+    * `unit` —— 单位说明，如 `十亿美元`
+    * `country` / `region_code` —— ISO3，进 `region_code` 列
+    * `region_name` / `fetched_at` / `raw_cache` / `source`（缺省 `imf`）
+
+    :param raw_data: imf_client.fetch_indicator() 的返回，元素形如 `{"period": "1980", "value": 303.55}`。
+    :param source_meta: 见上。缺 indicator 时 indicator_id 为空串（不报错）。
+    :returns: 与 NBS 同字段顺序的长表行（period 形如 `1980`，period_type 为 `annual`）。
+    :raises NormalizeError: 行不是 dict、缺 period、或时间/数值无法解析。
+    """
+    region_code = str(source_meta.get("country") or source_meta.get("region_code") or "")
+    region_name = str(source_meta.get("region_name", "") or "")
+    indicator_id = str(source_meta.get("indicator") or source_meta.get("indicator_id") or "")
+    indicator_name = source_meta.get("indicator_name") or source_meta.get("label")
+    unit = str(source_meta.get("unit") or "")
+    source = str(source_meta.get("source") or "imf")
+    fetched_at = str(source_meta.get("fetched_at", "") or _utc_now())
+    raw_cache = str(source_meta.get("raw_cache", "") or "")
+
+    rows: list[dict[str, Any]] = []
+    for idx, item in enumerate(raw_data):
+        if not isinstance(item, dict):
+            raise NormalizeError(f"第 {idx} 条 IMF 观测不是 dict: {type(item).__name__} -> {item!r}")
+        raw_p = item.get("period")
+        if raw_p in (None, ""):
+            raise NormalizeError(f"第 {idx} 条 IMF 观测缺少 period: {item!r}")
+        s = str(raw_p).strip()
+        if _RE_WB_BARE_YEAR.match(s):        # IMF 年度是裸年份 "1980"
+            s = s + "YY"
+        try:
+            period, period_type = parse_period(s)
+        except NormalizeError as exc:
+            raise NormalizeError(f"第 {idx} 条 IMF 观测时间解析失败: {exc}") from exc
+        try:
+            value = parse_value(item.get("value"))
+        except NormalizeError as exc:
+            raise NormalizeError(f"第 {idx} 条 IMF 观测数值解析失败: {exc}") from exc
+
+        raw_fields = {k: v for k, v in item.items() if k != "value"}
+        rows.append(_mk_row(region_code, region_name, indicator_id, "", indicator_name,
+                            period, period_type, value, unit, source, fetched_at,
+                            raw_cache, raw_fields))
+    return rows
+
+
+def normalize_cpi_wide(xData: Any, yData: Any,
+                       source_meta: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
+    """把 NBS「默认指标」接口的**宽表**转成标准长表行（第四阶段新增）。
+
+    该接口返回 `{"catalogName":..., "xData":[时间标签...], "yData":[{du,name,du_name,value:[...]}]}`，
+    其中 `yData[i].value` 是**字符串数组**（实测为 `["101.4","102.0",...]`，末位可能是 null），
+    所以必须走 `:func:parse_value` 解析。
+
+    本函数**输出全部序列的行**（一条 yData 一个序列）；调用方按 `indicator_name`
+    或 `indicator_id` 分组即可落多个文件。`source_meta["series_name"]` 给了就只输出那一支
+    （便于一条序列一个文件）。
+
+    :param xData: 时间标签列表，如 `["2015年", ..., "2025年"]`（也接受裸年份 `2015`）。
+    :param yData: 指标序列列表，元素含 `du` / `name` / `du_name` / `value`。
+    :param source_meta: 支持 `source`（缺省 `nbs`）、`region_code`（缺省 12 个 0）、
+                        `region_name`、`unit`、`catalog_id` / `catalog_name`、
+                        `fetched_at` / `raw_cache` / `series_name`。
+    :returns: 标准长表行；`indicator_id` 取 `yData[i].du`（该接口里它就是序列标识），
+              `unit` 取 `du_name`（CPI 实测为 `无`，即"无单位"）。
+    :raises NormalizeError: 时间标签无法解析，或数值无法转 float。
+    """
+    meta = dict(source_meta or {})
+    source = str(meta.get("source") or "nbs")
+    region_code = str(meta.get("region_code") or "000000000000")
+    region_name = str(meta.get("region_name", "") or "")
+    fetched_at = str(meta.get("fetched_at", "") or _utc_now())
+    raw_cache = str(meta.get("raw_cache", "") or "")
+    catalog_id = str(meta.get("catalog_id") or "")
+    want = meta.get("series_name")
+
+    labels = [str(x) for x in (xData or [])]
+    parsed_periods: list[tuple[str, str]] = []
+    for lbl in labels:
+        s = lbl.strip()
+        if _RE_WB_BARE_YEAR.match(s):
+            s = s + "YY"
+        try:
+            parsed_periods.append(parse_period(s))
+        except NormalizeError as exc:
+            raise NormalizeError(f"CPI 时间标签解析失败 {lbl!r}: {exc}") from exc
+
+    rows: list[dict[str, Any]] = []
+    for i, y in enumerate(yData or []):
+        if not isinstance(y, dict):
+            continue
+        name = str(y.get("name") or f"series{i}").strip()
+        if want and name != want:
+            continue
+        # 注意：yData[i].du 是**数据单位 id**，同一次响应里三条序列共用同一个值
+        # （实测 CPI 的全国/城市/农村都是 c52be9e0...）。所以必须补 yData 序号才唯一，
+        # 否则数据字典里三条序列会显示同一个 indicator_id。
+        du = str(y.get("du") or (catalog_id or "series"))
+        indicator_id = f"{du}#{i}"
+        unit = str(y.get("du_name") or meta.get("unit") or "")
+        vals = list(y.get("value") or [])
+        for pos, ((period, period_type), raw_v) in enumerate(zip(parsed_periods, vals)):
+            raw_fields = {
+                "y_index": i,
+                "y_name": name,
+                "x_label": labels[pos] if pos < len(labels) else None,
+                "raw_value": raw_v,
+            }
+            rows.append(_mk_row(region_code, region_name, indicator_id, "", name,
+                                period, period_type, parse_value(raw_v), unit, source,
+                                fetched_at, raw_cache, raw_fields))
     return rows
 
 
