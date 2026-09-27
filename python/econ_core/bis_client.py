@@ -56,27 +56,23 @@ BIS 官方 FAQ 的原文就摆在那里：
     DSD 端点不可依赖。维度顺序改从 ``availableconstraint`` 取，或直接读数据响应
     里自带的 ``data.structure.dimensions.series``（本模块用后者做冗余校验）。
 
-坑 4：BIS 返回**小写** `content-encoding: gzip`，http_client 漏解压（本模块就地绕开）
+坑 4：BIS 返回**小写** `content-encoding: gzip`（**已在 http_client 源头修好**）
     ``http_client.DEFAULT_HEADERS`` 带 ``Accept-Encoding: gzip, deflate``，BIS 于是真的 gzip 压缩
     （46932 字节 -> 8206 字节）。但 BIS（FusionEdgeServer）回的响应头名是**全小写**
-    （``content-encoding: gzip``，实测原始响应块逐字如此），而 ``http_client._decompress``
+    （``content-encoding: gzip``，实测原始响应块逐字如此），而旧版 ``http_client._decompress``
     取的是 ``resp_headers.get("Content-Encoding")`` —— **大小写敏感**，取到 ``None``，
     于是**不解压**，把 gzip 二进制当成 body 交给 ``json.loads``：
 
-        data/raw/_http_cache/fb559f0d3c32de9e.bin  前 4 字节 = 1f 8b 08 00（gzip magic）
         json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
 
-    实测确认根因：缓存 meta 的 ``headers`` 键名是 ``'content-encoding'``（小写），
-    而 ``headers.get('Content-Encoding')`` 返回 ``None``。对照实验（同一 URL 同一 UA）：
+    **这条坑已经修掉**：http_client 新增 ``_header_get()`` 做大小写不敏感查找，
+    ``_decompress`` / ``_decode_bytes`` / ``encoding`` 三处调用点全部改用它；
+    顺带修掉了同一处 ``resp_headers["Content-Type"]`` 的 **KeyError**（比取不到更严重）。
+    现在 ``http_client.get_json()`` 直取 BIS 就能拿到 dict，不需要任何绕过。
+    详见 PROJECT_STATE §3.13 与 http_client._decompress 的 docstring。
 
-        Accept-Encoding: 无 / identity   -> 200 + 46932 字节明文 JSON，无 Content-Encoding 头
-        Accept-Encoding: gzip            -> 200 +  8201 字节 gzip，content-encoding: gzip
-
-    **这是 http_client 的一个真实缺陷**（凡返回小写头名的服务器都会中招），
-    但本轮约束是「不改 http_client」，所以本模块自己解压：统一用
-    ``http_client.get_bytes()`` 取原始字节，再按 **gzip magic（1f 8b）** 判断解压。
-    按 magic 判断而不是靠 ``Content-Encoding`` 头，正好绕开同一个大小写问题。
-    修 http_client 的事记在 PROJECT_STATE §3.13，留给下一轮。
+    本模块的 ``_decode_body`` 仍保留 **gzip magic 兜底**，但那是为了兜「回了压缩流
+    却**不声明** Content-Encoding」的另一类服务器 —— 与大小写无关，属于纵深防御。
 
 坑 5：UNIT_MEASURE 的取值语义不在 SDMX 响应里
     ``771`` = 同比变化（%）；``628`` = 指数（**2010 = 100**）。SDMX 的 codelist
@@ -366,34 +362,37 @@ def _raise_for_status(resp: Any, dataset: str, key: str) -> None:
 
 
 def _decode_body(resp: Any) -> bytes:
-    """取响应原始字节，并按需 gunzip。
+    """取响应原始字节，并按需 gunzip（对 http_client 解压的**兜底**）。
 
-    **为什么不能直接用 http_client.get_json()**：见模块 docstring 坑 4 ——
-    BIS 回的 ``content-encoding`` 头名是全小写，http_client 的大小写敏感查找取不到，
-    于是漏解压，gzip 二进制会被当成 JSON 解析而崩。这里按 **gzip magic（1f 8b）**
-    判断，绕开同一个大小写问题；同时不依赖 ``Content-Encoding`` 头，对「回了 gzip
-    但不声明」的服务器也成立。
+    **历史**：这个函数最初是修 http_client 缺陷的**绕过**。当时 BIS 回的全小写
+    ``content-encoding: gzip`` 被 http_client 的大小写敏感查找漏掉，导致 gzip 二进制
+    被当 JSON 解析而崩（PROJECT_STATE §3.13）。
+
+    **现状**：http_client 已在源头修好（新增 `_header_get` 做大小写不敏感查找，
+    §3.13 已闭环），正常路径下这里收到的已经是**明文**，第一段判断不会命中。
+
+    那为什么还留着？—— 按 **gzip magic（``1f 8b``）** 判断而不是靠
+    ``Content-Encoding`` 头，覆盖的是另一类情况：服务器**回了压缩流但不声明**该头。
+    这类响应任何按头解压的客户端都救不了，而 magic 能识别。代价只有一次两字节比较，
+    所以保留为纵深防御，**不再打印任何日志**（正常路径不该有噪音；命中即说明
+    http_client 又漏了，属于异常，交给下游 JSON 报错暴露）。
     """
     raw = getattr(resp, "content", b"") or b""
     if isinstance(raw, str):                     # 理论上 get_bytes 给的是 bytes，兜一下
         raw = raw.encode("utf-8", "replace")
-    if raw[:2] == b"\x1f\x8b":                   # gzip magic
+    if raw[:2] == b"\x1f\x8b":                   # gzip magic：兜住"压缩但不声明"
         try:
             raw = gzip.decompress(raw)
-            print("[gunzip] BIS 回了小写 content-encoding: gzip，http_client 未解压，"
-                  "本模块就地解压", file=sys.stderr)
-        except Exception as exc:  # noqa: BLE001 - 解压失败让下游 JSON 报错，信息更具体
-            print(f"[gunzip] 失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+        except Exception:  # noqa: BLE001 - 解压失败让下游 JSON 报错，信息更具体
+            pass
     elif raw[:1] == b"\x78":                     # zlib/deflate 常见头（0x78）
         try:
             raw = zlib.decompress(raw)
-            print("[inflate] BIS 回了 deflate 且 http_client 未解压，本模块就地解压",
-                  file=sys.stderr)
         except Exception:  # noqa: BLE001
             try:
                 raw = zlib.decompress(raw, -zlib.MAX_WBITS)
-            except Exception as exc:  # noqa: BLE001
-                print(f"[inflate] 失败: {type(exc).__name__}: {exc}", file=sys.stderr)
+            except Exception:  # noqa: BLE001
+                pass
     return raw
 
 

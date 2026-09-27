@@ -6,7 +6,7 @@
 
 权威性顺序（冲突时以序号小的为准）：
 
-1. 门禁 tools/run-all-checks.py 的**实际输出**（当前应为 22/22 PASS）——这是唯一硬标准
+1. 门禁 tools/run-all-checks.py 的**实际输出**（当前应为 24/24 PASS）——这是唯一硬标准
 2. 本文件
 3. 各模块 docstring —— 细节、实测证据、踩坑经过都写在那里
 
@@ -55,7 +55,9 @@
 - python/econ_core/source_profiles.yaml —— **人工编纂**的来源画像知识库：4 个发布机构 + 13 条指标口径 + 18 个字段语义 + 口径家族表
 - python/econ_core/arbiter.py —— 口径判定仲裁：把「画像判定」与「实测差异（读 cross_check 产物）」配成一条记录，给出 同口径 / 可桥接 / 不可拼接 / 人工复核 四值判定 + alignment（画像与实测是否同调）
 - python/econ_core/credibility.py —— 五维可信度评分（Expertise 0.25 / Provenance 0.20 / Timeliness 0.10 / Transparency 0.15 / Coherence 0.30）-> 0-100 分 + high/medium/low
-- tools/smoke-bis-adapter.mjs —— BIS 插件 argv 拼装冒烟（桩替换 execFile；覆盖「三参数全可选」与「key 原样透传」）（**本轮新增**）
+- python/econ_core/splicer.py —— **序列拼接器**：按策略在重叠期选源（later_wins / earlier_wins）+ 重叠期一致性 + 三类断点（level_jump / trend_break / variance_shift）+ 三值 verdict（**本轮新增**）
+- tools/splice-cpi.py —— **首次真实拼接**：BIS 中国 CPI 同比（月度按年均值年化）⊗ NBS 年度 CPI，落 data/validated/spliced/（**本轮新增**）
+- tools/smoke-bis-adapter.mjs —— BIS 插件 argv 拼装冒烟（桩替换 execFile；覆盖「三参数全可选」与「key 原样透传」）
 
 **输出层**
 
@@ -67,7 +69,7 @@
 - python/econ_core/README.md —— 生产层已知上游事实（失业率两条口径、登记失业率 2022 起停更等）
 - python/_probes/README.md —— 逆向探测脚本索引与已知观察（NBS 接口考古、缓存键缺陷等）
 
-### 1.2 门禁：22 项（tools/run-all-checks.py，当前 22/22 PASS）
+### 1.2 门禁：24 项（tools/run-all-checks.py，当前 24/24 PASS）
 
 | # | 检查 | 类型 | 说明 |
 |---|---|---|---|
@@ -93,24 +95,31 @@
 | 20 | credibility --test | python | 可信度评分自检，5 个场景（纯离线，约 0.6s） |
 | 21 | export | python | processed → CSV / SQLite / 数据字典（纯离线） |
 | 22 | report | python | 5 份 JSON → 单文件 HTML 质量报告 + 7 项自检（纯离线，约 1s） |
+| 23 | splicer --test | python | 拼接器自检，4 个必测场景 + 4 个边界（纯离线，约 0.1s）（**本轮新增**） |
+| 24 | splice-cpi | python | 首次真实拼接：BIS 年化 ⊗ NBS 年度 CPI（读 validated + 拉一次 BIS）；timeout 420s（**本轮新增**） |
 
-门禁的运行顺序**有依赖**：materialize-validated（18）-> run-fill-strategy（19）-> credibility（20）-> export（21）-> report（22）最后。credibility 读 validated + processed + cross_check 三样产物，所以不能挪到 arbiter 旁边（干净检出时会误报）。check-cli-envelope 与三个 compare 脚本是网络密集型，超时放宽到 420s。
+门禁的运行顺序**有依赖**：materialize-validated（18）-> run-fill-strategy（19）-> credibility（20）-> export（21）-> report（22）-> splicer（23）-> splice-cpi（24）最后。credibility 读 validated + processed + cross_check 三样产物，所以不能挪到 arbiter 旁边（干净检出时会误报）；**splice-cpi 读 `data/validated/nbs/nbs_cpi_全国居民消费价格指数（上年=100） (%).json`，必须排在 materialize-validated 之后**。check-cli-envelope 与三个 compare 脚本是网络密集型，超时放宽到 420s。
+
+**第 24 项 `splice-cpi` 是我主动加的**（本轮任务只要求加 splicer --test 变成 23/23）。理由：`splicer --test` 只证明**合成**数据能拼；PROJECT_STATE 长期记着「系统至今从未真正拼接」，而「真实链路上两条序列真的接上了、断点真的被判出来」只有跑真实脚本才算验过。若认为超范围，删掉 `CHECKS` 里那一行即可（其余不受影响）。
 
 **check-cli-envelope 的 BIS 两条用例是本轮新加的**（12 子命令 / 13 用例）。理由：smoke 脚本用桩替换 execFile，只能验证 argv 拼装，**验证不了真实 CLI 的信封契约**（§3.8）；新源不进契约测试就等于信封契约无覆盖。**只加条目、未改任何已有条目。** 顺带发现：**FRED 不在 check-cli-envelope 的覆盖里**（历史遗留，属既有状态，本轮未动），其信封契约目前只有 smoke 的 argv 桩覆盖。
 
 ### 1.3 当前数据规模
 
-- **声明式序列数**：**10 条**（NBS 6 + World Bank 1 + IMF 2 + **FRED 1**）。missing_report.json 里的 n_series=20 是**含重复**的：声明式 10 条 + 落盘扫描 10 条键
-- **BIS 序列（本轮新增，尚未进声明式清单）**：`bis|WS_LONG_CPI|M.CN.771`（同比 %，月度 368 期，1996-01~2026-08）、`bis|WS_LONG_CPI|M.CN.628`（指数 2010=100，月度 380 期，1995-01~2026-08）、以及自检锚点用的 `A.CN.771`（年度 47 期）。**本轮只落 `data/parsed/bis/`，不进 validated / processed / 导出**，也**不计入下面的 152 行** —— 接进声明式清单与拼接器放同一轮做
-- **总行数**：**152 行**（10 条落盘序列合计：原 142 + FRED CPI 年均值 10 行）。历史提醒：曾经的 152 是重复计数（alias 副本算了两遍），现已由 export.py 去重修正；这次的 152 是真实口径
-- **缺失行数**：10 行（value 为 null / 空串 / NULL，**一个都没有填补**）
-- **缺失分类（按行统计）**：series_start 5 / discontinued 3 / not_yet_published 2 / true_gap **0**
+- **声明式序列数**：**12 条**（NBS 6 + World Bank 1 + IMF 2 + FRED 1 + **BIS 2**）
+- **BIS 序列（本轮接进全链路）**：`bis|WS_LONG_CPI|M.CN.771`（同比 %，月度 368 期，1996-01~2026-08）、`bis|WS_LONG_CPI|M.CN.628`（指数 2010=100，月度 380 期，1995-01~2026-08）。**月度原生粒度，不做年化**（理由见 `tools/scan-missing.py` 里 `BIS_CPI` 的注释）
+- **总行数**：**900 行**（validated 948 = 12 条声明式 + selftest 残留；processed 910 / CSV 900 / SQLite 900，口径差异见 §3.9）。历史提醒：曾经的 152 是重复计数（alias 副本算了两遍），已由 export.py 去重修正
+- **按源分布（CSV/SQLite 实测）**：**bis 748** / imf 69 / nbs 63 / fred 10 / worldbank 10。**BIS 一次接入就占了 83% 的行数** —— 748 = 368 + 380
+- **缺失行数**：10 行（全部来自 NBS/IMF 年度序列；**BIS 两条零缺失**）；**一个都没有填补**
+- **缺失分类（按行统计，口径同 §3.9）**：series_start 5 / discontinued 3 / not_yet_published 2 / true_gap **0**
 - **缺失动作（按行统计）**：leave_null 8 / wait 2 / interpolate 0
-- **row_sha16 覆盖率**：152/152（全部唯一）
-- 落盘位置：data/validated/（9 个长表 JSON + missing_report.json）→ data/processed/（10 个带缺失元数据的 JSON）→ data/output/（CSV + SQLite + 字典）
-- 知识库另有 **2 条只用于对比、未落盘**的序列（nbs|gdp|index_prev_year_100、imf|NGDP_RPCH），所以知识库规范键 13 条 > 落盘序列 10 条
+- **row_sha16 覆盖率**：900/900（全部唯一）
+- 落盘位置：data/validated/（12 个长表 JSON + missing_report.json + spliced/）→ data/processed/（12 个带缺失元数据的 JSON）→ data/output/（CSV + SQLite + 字典）
+- **首次真实拼接产物**：`data/validated/spliced/cpi_bis_nbs_spliced.json` —— 30 期（1996~2025），拼接点 2015，verdict=需桥接
+- **missing_report.json 的 n_series=13**（12 条声明式 + 1 条 selftest 残留）。**注意**：这个数在本轮之前是 23，因为落盘扫描的去重**从来没生效过**（详见 §3.14）
+- 知识库另有 **2 条只用于对比、未落盘**的序列（nbs|gdp|index_prev_year_100、imf|NGDP_RPCH），所以知识库规范键 > 落盘序列数
 
-11 个 series_key（10 条声明式序列 + 1 条别名键；知识库必须与之一一对应）：
+12 个声明式 series_key（知识库必须与之一一对应）：
 
 1. nbs|gdp|cny_100m
 2. nbs|cpi|全国居民消费价格指数（上年=100） (%)
@@ -121,11 +130,22 @@
 7. worldbank|NY.GDP.MKTP.CN
 8. imf|NGDPD
 9. imf|LUR（起点 2017）
-10. fred|CHNCPIALLMINMEI（FRED/OECD 中国 CPI 指数，月度 -> 年均值；**本轮新增**）
-11. NBS|000000000000|db8e5a86c08246e79b1b11251927e740（**别名**，指向第 1 条）
+10. fred|CHNCPIALLMINMEI（FRED/OECD 中国 CPI 指数，月度 -> 年均值）
+11. bis|WS_LONG_CPI|M.CN.771（BIS 中国 CPI 同比 %，月度 368 期；**本轮接进全链路**）
+12. bis|WS_LONG_CPI|M.CN.628（BIS 中国 CPI 指数 2010=100，月度 380 期；**本轮接进全链路**）
+13. NBS|000000000000|db8e5a86c08246e79b1b11251927e740（**别名**，指向第 1 条，不计入 12 条声明式）
 
-### 1.4 最近一轮新增（方向 C 第三轮：接 BIS）
+### 1.4 最近一轮新增（方向 C 第四轮：修 http_client + 拼接器）
 
+- **修掉 `http_client` 的大小写敏感缺陷**（§3.13 闭环）：新增 `_header_get()` 做大小写不敏感查找，`_decompress` / `_decode_bytes` / `encoding` 三处调用点全部改用它；顺带修掉同一处 `resp_headers["Content-Type"]` 的 **KeyError**（比取不到更严重，会让整次请求失败而不是降级）
+- **`python/econ_core/splicer.py` + `tools/splice-cpi.py`**（**本轮新增**）：拼接器 **30 项自检全过**；首次真实拼接 30 期、拼接点 2015、verdict=需桥接
+- **BIS 两条序列接进 `scan-missing.py` 的声明式清单**（`materialize-validated.py` 自动继承，因为它复用清单不复制）→ 打通 validated / processed / CSV / SQLite。数据规模从 **152 行涨到 900 行**（bis 占 748）
+- **月度 vs 年化的决定：保留月度原生粒度**。理由：① BIS 的价值就在 1995 起的月度覆盖，年化后只剩 31/32 行，等于把接它的理由丢掉一半；② 拼接器的断点检测在月度分辨率下才有意义（年度 3 点斜率会横跨好几年的真实变化）；③ 想跟年度 CPI 对比可以在对比脚本里年化，反过来从年度恢复月度不可能 —— 保留信息量大的形态是**单向安全**的选择
+- **又修了一个静默 bug（§3.14）**：`scan_materialized()` 用 `_auto_series_key` 推行键，与声明式清单的规范键**对所有落盘文件都不一样**，导致「按 series_key 跳过已覆盖的」这层去重**从来没生效**。修成「产物自带 series_key 优先」后，missing_report 的 n_series 从 23 降到 13、缺口段从 10 降到 5 —— 也就是**之前有一半统计是重复计数**
+- 门禁 22 -> **24/24**（新增第 23 项 `splicer --test`；**另加第 24 项 `splice-cpi`**，理由见 §1.2 表下说明）
+- **本轮踩到并修掉的拼接器设计问题**：`level_jump` 只看「相对跳变」，把中国 CPI 2014→2015（2.06%→1.4% 的真实变化）判成 reject「不可拼接」。修法是同时报 `excess_ratio` = 绝对跳变 / 该序列接缝前同源步长中位数，超额 ≤ 1 就降为 ok
+
+### 1.5 上一轮新增（方向 C 第三轮：接 BIS）
 - **四源独立性探测已完成并固化**（§3.10/§3.11/§3.12）：BIS / OECD / PWT 11.0 / Maddison 2023 **全部不是独立编制**，细节与对比表在 `python/_probes/README.md`
 - **`bis_client.py` + `bis_client_cli.py` + `bis-adapter.js` + `smoke-bis-adapter.mjs` + 知识库 BIS 条目**（2 个 publisher / 2 条 indicator / 2 条 family）
 - 自检 14/14 PASS；BIS 中国 CPI 月度实测 **1995-01 起的指数（380 期）/ 1996-01 起的同比（368 期）**
@@ -135,7 +155,7 @@
 - **修好了 `verify-preset.mjs` 的 default 断言**（原断言要求 `default` 必须等于本 preset 的目录 id，于是 `default: standard` 被判 FAIL）。现改为「等于本 preset id **或** 是内置 preset（standard / minimal / code / cordis）」，理由是 `default: standard` 是**有意配置**（避免新会话打不开），不是错误。修后 `ALL CHECKS PASSED`（exit 0）。**注意 `verify-preset.mjs` 不在门禁 22 项里**，需要手工跑
 - **本轮刻意不做**：拼接器与拼接断点检查（下一轮）、把 BIS 接进声明式清单与导出链路
 
-### 1.5 上一轮新增（arbiter 改成数据驱动）
+### 1.6 更早一轮（arbiter 改成数据驱动）
 
 - python/econ_core/arbiter.py —— `_adapt` 重写：读产物自带的 `series_a` / `series_b` / `measured`（或 `pairs` 数组），不再按键名猜形状；缺字段只记 warning
 - 5 个对比脚本（compare-gdp / -3way / -real / -unemployment / -cpi）输出都补了这三个字段（多对用 `pairs` 数组）
@@ -430,15 +450,61 @@ ICP 2021 方向：单独立项，见 §5.3。
 NBS / World Bank / IMF / FRED 四个源目前都没踩到 —— 它们的响应要么不压缩，
 要么头名大小写恰好对得上。所以这是**随服务器实现而定的潜在缺陷**，不是必然故障。
 
-**本轮处置**（遵守「不改 http_client」的约束）：`bis_client` 自己解压 ——
+**当时的处置**（第三轮，遵守「不改 http_client」的约束）：`bis_client` 自己解压 ——
 统一用 `get_bytes()` 取原始字节，再按 **gzip magic（`\x1f\x8b`）** 判断解压
-（`_decode_body`）。按 magic 判断而不是靠 `Content-Encoding` 头，正好绕开同一个大小写问题，
-对「回了 gzip 但不声明」的服务器也成立。实测 BIS 的 4 个端点全部走通。
+（`_decode_body`）。实测 BIS 的 4 个端点全部走通。
 
-**待修（下一轮）**：`_headers_to_dict` 或 `_decompress` 的查找改成大小写不敏感
-（例如 `resp_headers.get("Content-Encoding") or resp_headers.get("content-encoding")`，
-或干脆把头名统一 lower 后再查）。修完 `bis_client._decode_body` 可以简化，
-但**建议保留 magic 兜底** —— 它是「不信任服务器声明」的那一层。
+**✅ 已修（第四轮，约束到期）**：http_client 新增 `_header_get(headers, name, default)` 做
+**大小写不敏感**查找，三处调用点全部改用它：
+
+| 位置 | 改前 | 改后 | 严重度 |
+|---|---|---|---|
+| `_decompress` 入参 | `resp_headers.get("Content-Encoding")` | `_header_get(resp_headers, "Content-Encoding")` | 漏解压 -> JSON 崩 |
+| `encoding` 推导 | `resp_headers.get("Content-Type","")` + `resp_headers["Content-Type"]` | `_header_get(resp_headers, "Content-Type", "")` | **`["Content-Type"]` 会 KeyError 让整次请求失败**（比取不到更严重，之前没注意到） |
+| `_decode_bytes` | 自制 for 循环比 `k.lower()` | `_header_get(...)` | 行为不变，去重复实现 |
+
+验证：`http_client.get_json()` 现在**直取 BIS 就能拿到 dict**（旧代码必崩）；
+`_decompress` 对 gzip / GZIP / deflate / 裸 deflate / None / 未知 `br` / 坏 gzip 七种输入
+逐个验过，行为与修前约定一致（不解压或解压失败都按原始字节返回，只记 warning）。
+
+`bis_client._decode_body` 的 magic 兜底**保留**了，但已从「绕 bug」重新定位为
+「兜住回了压缩流却不声明 `Content-Encoding` 的服务器」；命中时**不再打日志**
+（正常路径不该有噪音，命中即说明 http_client 又漏了，交给下游 JSON 报错暴露）。
+
+### 3.14 ⚠️ scan_materialized 的去重从来没生效（静默重复计数，本轮修）
+
+**现象**：`missing_report.json` 的 `n_series` 长期是「声明式 + 落盘扫描」两遍之和，
+一直被当成"含重复但无害"。第四轮把 BIS 接进声明式清单后核对发现：**去重代码一行都没起作用**。
+
+**根因**：`tools/scan-missing.py` 的 `scan_materialized()` 用
+`missing._auto_series_key([r])` 推行键，得到的是 `source|region_code|indicator_id`
+（如 `bis|000000000000|WS_LONG_CPI|M.CN.771`）；而声明式清单用的、以及
+`materialize-validated.py` **写进落盘文件**的，是规范键
+（如 `bis|WS_LONG_CPI|M.CN.771`）。实测**12 个落盘文件里 12 个都对不上**：
+
+    bis\bis_WS_LONG_CPI_M.CN.771.json   stored=bis|WS_LONG_CPI|M.CN.771   auto=bis|000000000000|WS_LONG_CPI|M.CN.771   DIFF
+    nbs\nbs_gdp_cny_100m.json           stored=nbs|gdp|cny_100m           auto=nbs|000000000000|db8e5a86…            DIFF
+    imf\imf_LUR.json                    stored=imf|LUR                    auto=imf|CHN|LUR                            DIFF
+    （其余 9 个同样 DIFF）
+
+于是主流程里 `if key in declared_keys: 跳过` 永远不命中 —— **同一序列被扫两遍，
+缺口段也被算两遍**。这正是 §3.9 说的"两个口径混用"背后被忽略的第三个坑。
+
+**修法**（用本项目自己的约定，不新造规则）：`scan_materialized()` 改为
+**产物自带的 `series_key` 优先，缺失才退回 `_auto_series_key`**。这正是
+`fill_strategy._scan_validated_series()` 与 `source_profiles.yaml` 的
+`fields.series_key` 早就写明的规则，`scan_materialized` 之前没跟上。
+
+**修后实测变化**：
+
+| 指标 | 修前 | 修后 |
+|---|---|---|
+| `n_series` | 23 | **13**（12 条声明式 + 1 条 selftest 残留） |
+| 缺口段合计 | 10 | **5** |
+| 跳过日志 | 无 | 12 条「已由声明式清单覆盖，不重复计」 |
+
+即**此前约一半的统计是重复计数**。两条断言（登记失业率=discontinued、调查失业率=series_start）
+修前修后都 PASS，所以这个 bug 不会被门禁抓到 —— 它只在**数字**上错。
 
 ---
 
@@ -476,18 +542,24 @@ NBS / World Bank / IMF / FRED 四个源目前都没踩到 —— 它们的响应
                                                                                 v
                                           (下一轮) Arbiter: 同口径 / 可桥接 / 不可拼接
 
-    横切: tools/run-all-checks.py —— 22 项门禁，任何改动后必跑
+    横切: tools/run-all-checks.py —— 24 项门禁，任何改动后必跑
 
 ### 4.2 每层职责与产物
 
 | 层 | 模块 | 输入 | 产物 |
 |---|---|---|---|
-| 采集 | http_client.py + 三个 client | URL / 参数 | data/raw/_http_cache/*.bin（HTTP 原文） |
+| 采集 | http_client.py + 五个 client | URL / 参数 | data/raw/_http_cache/*.bin（HTTP 原文） |
 | 规范化 | normalize.py | 原始观测 | data/parsed/<source>/<endpoint>_<sha16>.json；data/validated/<source>/*.json |
 | 缺失分类 | missing.py | 长表行 | 缺口 + 四分类（无独立落盘，进 missing_report.json） |
 | 策略 | fill_strategy.py | validated + missing_report | data/processed/<source>/<name>_processed.json |
+| **拼接（本轮新增）** | **splicer.py + tools/splice-cpi.py** | **两条同指标序列（长表行）** | **data/validated/spliced/<name>.json（拼接结果 + 重叠期 + 断点 + verdict）** |
 | 输出 | export.py | processed | data/output/econ_data.csv、econ_data.db、data_dictionary.md |
-| 画像 | source_profiler.py | 知识库 + validated + missing_report | 内存画像（供下一轮 Arbiter 消费） |
+| 画像 | source_profiler.py | 知识库 + validated + missing_report | 内存画像（供 Arbiter 消费） |
+
+**拼接层的位置**：它在 validated **之后**、processed **之前**的语义位置上（输入是两条已规范化的序列），
+但**本轮刻意不接进 processed**——`fill_strategy` 不认识拼接产物，硬接会动到它的扫描规则。
+当前 splicer 只被 `tools/splice-cpi.py` 调用，产物落在 `data/validated/spliced/`（**会被落盘扫描看见**，
+但它没有 `value` 键的顶层 rows 结构，所以不会被误当序列，见 §3.8 的落盘扫描识别规则）。
 
 ### 4.3 落盘信封结构（三层各有固定形状）
 
@@ -520,9 +592,9 @@ NBS / World Bank / IMF / FRED 四个源目前都没踩到 —— 它们的响应
 - **方向 D 已完成四轮**：① HTML 报告 ② 血缘 + 真实门禁状态 ③ 修 export alias 重复 ④ 图表内联（报告自包含，断网可看）；后续可选导出 PDF / 挂 CI（CI 用 `report.py --test --offline`，冷检出要先预热缓存）。原本挂在方向 A 第四轮下的**拼接断点检查已并入方向 C 第四轮**（那里才有真场景）
 - **方向 C 第一轮：FRED CPI —— 已完成**：NBS「上年=100」vs FRED/OECD 10 年全部落「一致」档（最大 0.081 pp）。但 FRED 的原始数据来自 NBS（OECD 转述），**一致性只证明转述无误**
 - **方向 C 第二轮「加独立源验证 CPI」—— 已探测，结论：不可达**。四个候选（BIS / OECD / PWT 11.0 / Maddison 2023）**全部不是独立编制**，见 §3.10 与 `python/_probes/README.md`。**不要重开这个方向**：问题不在「还没找到源」，在于中国的价格采集只有 NBS 一个执行者
-- **方向 C 第三轮：接 BIS —— 已完成**（bis_client + CLI + adapter + 知识库 + smoke，门禁 22/22）。理由是**序列长度与拼接实现**，不是独立性：BIS 提供 1995-01 起的月度中国 CPI（现有序列 2015 起，扩 20 年），且 BIS 自己对转载序列做了拼接（joining consecutive periods）+ 重定基（2010=100），是本项目里第一条**真正需要拼接**的链外序列
-- **方向 C 第四轮（下一步）：BIS 接声明式清单 + 拼接器 + 拼接断点检查**。三件事同一轮做，因为它们是同一条链：① 把 `bis|WS_LONG_CPI|M.CN.628`（或 771）写进 `tools/scan-missing.py` 的声明式清单，让 BIS 走到 validated / processed / 导出；② 写拼接器（当前系统从未真正拼接）；③ 激活一直空转的拼接断点检查。**真场景已就位**：BIS 的 628 起点 1995-01、771 起点 1996-01，两者差 12 期，正好是拼接逻辑要处理的第一个真实台阶
-- **修 `http_client._decompress` 的大小写缺陷（建议与 C 第四轮同轮）**。见 §3.13；修完 `bis_client._decode_body` 可简化，但建议**保留 gzip magic 兜底**（那是「不信任服务器声明」的一层）
+- **方向 C 第三轮：接 BIS —— 已完成**（bis_client + CLI + adapter + 知识库 + smoke）。理由是**序列长度与拼接实现**，不是独立性：BIS 提供 1995-01 起的月度中国 CPI（现有序列 2015 起，扩 20 年），且 BIS 自己对转载序列做了拼接（joining consecutive periods）+ 重定基（2010=100），是本项目里第一条**真正需要拼接**的链外序列
+- **方向 C 第四轮：修 http_client + 拼接器 —— 已完成**（门禁 24/24）。四件事：① 修 `http_client` 大小写缺陷（§3.13 闭环，顺带修掉一处 `KeyError`）；② BIS 两条接进声明式清单，打通 validated / processed / 导出（152 -> **900 行**）；③ 新增 `splicer.py` + `tools/splice-cpi.py`，**首次真实拼接** 30 期 / 拼接点 2015 / verdict=需桥接；④ 顺手修掉落盘扫描**去重从来没生效**的静默 bug（§3.14，n_series 23 -> 13）
+- **拼接结果只到 validated，没进 processed**。下一步若要让它进导出链路，得先让 `fill_strategy` 认识拼接产物（它现在只认 `rows` 长表）。**也还没做**：水平调整（ratio splice / rebasing）、PROV-JSON 血缘
 - **ICP 2021 方向：单独立项（真正独立的价格水平数据）**。CPI 维度已证不可达（§3.10），但**价格水平**维度的独立测量是存在的：世界银行 ICP 是各经济体**自己采集**一篮子代表品，2021 轮中国**参加了**（NBS 2024-05 自行发布过 2021 轮 ICP 结果）。可用它验 PWT 的 `pl_gdpo` 或 OECD `DF_TABLE4` 的中国 PPP —— 一方是中国官方采集、一方是多边化处理，这才是真交叉验证。立项前要先解决 §3.11 的 TLS 证书链（PWT 侧）
 - **方向 B（已暂停，需单独立项）**：桌面版装配链路。实测本会话真正生效的是 .dsh/econ-harvester.patch.yml 的 global insert，不是 preset 的 persona；共有三层注册机制、两份 preset 副本
 - **落地插值**：当前 true_gap = 0 例，所以插值实现故意留空（出现 interpolate 会抛 NotImplementedError）。等真遇到上游序列中断再实现，并同步补回归
@@ -530,6 +602,8 @@ NBS / World Bank / IMF / FRED 四个源目前都没踩到 —— 它们的响应
 ### 5.4 已知的小尾巴
 
 - **arbiter 曾按硬编码序列对识别形状，差点把 CPI 对比错配给 GDP 指数对**：compare-cpi.py 最初写的顶层键 `max_abs_diff_pp` 命中 `_adapt` 的 GDP 指数形状，产出一条「看起来 7 对、实际第 7 对是错的」结果（`measured.source` 指向 cpi 文件，pair_key 却是 GDP）。已改为数据驱动（产物自带 `series_a` / `series_b` / `measured`，旧的键名形状只记 warning）。这是「数据驱动 vs 硬编码」的活教材：**按键名猜语义，迟早错配**
+- **拼接器判"水平跳跃"必须跟序列自身的步长比**（本轮实测踩到）：中国 CPI 2014→2015 是 2.06%→1.4% 的**真实变化**，相对量 0.32 却被判 reject「不可拼接」。已加 `excess_ratio`（绝对跳变 / 接缝前同源步长中位数），超额 ≤1 降为 ok。**教训**：任何"相对阈值"都必须先问「这个分母的量级是多少」——同一课在 `overlap.max_diff_rate` 上又犯了一次（0.0 vs 0.051 算出"分歧 100%"）
+- **`RELATIVE_METRIC_FLOOR = 0.5` 是为百分点量纲标定的**，不普适。换成亿元量纲的序列（GDP）要相应放大。没做成自适应是因为实测那样会反向漏判（一路降到 0 的序列，中位量级本身也小）
 - aggregated_from_months 只存在于 validated / processed 的 JSON 层，**不在 CSV / SQLite 里**（输出层 14 列是定案集合，export.py 未改）。要它可见就追加为第 15 列，或折进 missing_evidence
 - compare-gdp-3way 的 timeout 已放宽到 420s，但实测波动大（16.5s -> 85.1s -> 74.1s），若再变慢要考虑拆项；**arbiter 的 verdict 与 recommended_action 可能不同调**（gdp × imf|NGDPD：画像=可桥接，实测=noise/splice）——已用 alignment=profile_stricter 显式记录，要真正统一得改 source_profiler 的归因规则
 
@@ -541,11 +615,15 @@ NBS / World Bank / IMF / FRED 四个源目前都没踩到 —— 它们的响应
 
 逐文件的职责与实测细节见 **1.1 已完成模块**（那里更细）。以下只列 1.1 未展开的部分。
 
+**HTTP 层的两个通用工具**（本轮新增，供所有 client 复用；别再各自造轮子）：
+`_header_get(headers, name, default)` —— 大小写不敏感的响应头查找（§3.13）；
+`_decompress(body, content_encoding)` —— 按 Content-Encoding 解压，失败/未知都降级为原始字节。
+
 ### 6.2 tools/ —— 脚本层（门禁、对比、加工、输出）
 
 | 文件 | 一句话职责 |
 |---|---|
-| run-all-checks.py | 门禁总入口：顺序跑 22 项检查，失败即停；支持逐检查 timeout 覆盖 |
+| run-all-checks.py | 门禁总入口：顺序跑 24 项检查，失败即停；支持逐检查 timeout 覆盖 |
 | check-cli-envelope.py | 契约测试：真跑 10 个子命令（11 用例），按 R1-R11 校验 stdout 信封；超时 420s |
 | smoke-nbs-adapter.mjs | NBS 插件冒烟：桩替换 execFile，验证 argv 与必填校验 |
 | smoke-worldbank-adapter.mjs | World Bank 插件冒烟（含 wantArgv 精确比对） |
@@ -563,6 +641,7 @@ NBS / World Bank / IMF / FRED 四个源目前都没踩到 —— 它们的响应
 | run-fill-strategy.py | 一键 validated -> processed；内置 raw 缓存快照对比证明脱网 |
 | export.py | 输出层：processed -> CSV（utf-8-sig）+ SQLite（表/索引/视图）+ Markdown 数据字典；按规范键去重 alias 副本 |
 | report.py | 展示层：5 份 JSON -> 单文件 HTML 质量报告（Plotly 走 CDN）+ 7 项自检 |
+| splice-cpi.py | 首次真实拼接：BIS 年化 ⊗ NBS 年度 CPI，产出 data/validated/spliced/ |
 
 ### 6.3 src/plugins/ 与 .dsh/ —— 会话装配
 
@@ -586,7 +665,8 @@ NBS / World Bank / IMF / FRED 四个源目前都没踩到 —— 它们的响应
 | 目录 | 内容 |
 |---|---|
 | data/raw/_http_cache/ · data/parsed/{nbs,worldbank,imf,fred}/ | HTTP 原文存档（所有结论的最终证据）；按请求指纹的解析结果 |
-| data/validated/{nbs,worldbank,imf,fred}/ | 长表（10 条声明式序列），materialize-validated 的产物 |
+| data/validated/{nbs,worldbank,imf,fred,bis}/ | 长表（12 条声明式序列），materialize-validated 的产物 |
+| data/validated/spliced/ | 拼接产物（cpi_bis_nbs_spliced.json：拼接结果 + 重叠期 + 断点 + verdict） |
 | data/validated/missing_report.json | 缺失分类总报告（scan-missing 产物） |
 | data/validated/{arbiter,credibility}/ | 口径判定报告（7 对）/ 可信度评分报告（12 条） |
 | data/validated/cross_check/ · data/processed/ | 对比结果 JSON（**5 个脚本**，自带 series_a/series_b/measured）；processed 是带缺失元数据的行（11 个文件 / 去重后 10 条序列） |
@@ -614,19 +694,19 @@ NBS / World Bank / IMF / FRED 四个源目前都没踩到 —— 它们的响应
        cd D:\universe\econ-data-harvester
        .\.venv\Scripts\python.exe tools\run-all-checks.py
 
-   期望 22/22 PASS，exit 0。若不是 22/22，先定位是哪一项退化了，不要继续叠加改动。
-4. 报告状态：门禁结果、git status、当前数据规模（10 条声明式序列 / 152 行 / 10 缺失行），然后停下等指令
+   期望 24/24 PASS，exit 0。若不是 24/24，先定位是哪一项退化了，不要继续叠加改动。
+4. 报告状态：门禁结果、git status、当前数据规模（12 条声明式序列 / 900 行 / 10 缺失行），然后停下等指令
 
 ### 7.1 报告模板（建议照抄）
 
-    门禁：22/22 PASS（exit 0）
+    门禁：24/24 PASS（exit 0）
     working tree：<git status --short 的内容>
-    数据：10 条声明式序列 / 152 行 / 10 缺失行（按行：series_start 5, discontinued 3, not_yet_published 2, true_gap 0）
+    数据：12 条声明式序列 / 900 行 / 10 缺失行（按行：series_start 5, discontinued 3, not_yet_published 2, true_gap 0）
 
 ### 7.2 改动后的固定动作
 
 1. 开工前自检：pwsh 报 ACL 故障见 3.7；import yaml / Jinja2 见 3.6；data/validated 为空则先跑 materialize-validated
-2. 跑完整门禁，确认仍 22/22（新增检查要同步加进 CHECKS 与 docstring 编号）
+2. 跑完整门禁，确认仍 24/24（新增检查要同步加进 CHECKS 与 docstring 编号）
 3. 新增序列 -> 补 source_profiles.yaml 条目（否则 profiler 抛 KeyError）
 4. 改契约/分类/字段名 -> 同步更新本文件的第 2 节与第 3 节
 5. 不要把 data/ 下的产物提交进 git（它们已被忽略）；不要把 raw 存档删掉（那是证据链）

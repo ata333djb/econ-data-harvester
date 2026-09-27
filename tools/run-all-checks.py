@@ -39,6 +39,8 @@
 20. python -m econ_core.credibility --test             （可信度评分自检，纯离线 0.5s）
 21. python tools/export.py                             （导出 CSV + SQLite + 数据字典）
 22. python tools/report.py --test                      （单文件 HTML 质量报告 + 7 项自检，纯离线）
+23. python -m econ_core.splicer --test                 （拼接器自检，纯离线）
+24. python tools/splice-cpi.py                         （首次真实拼接：BIS 年化 ⊗ NBS 年度 CPI）
 
 约定
 ----
@@ -151,6 +153,14 @@ CHECKS: list[Check] = [
     # report 读 data/ 下的 JSON 合成 HTML，不联网；arbiter/credibility 报告缺失时它会补生成，
     # 所以排在最后（「产物 -> 展示」的顺序，export 本身不依赖它）。
     Check("report", "python", ["tools/report.py", "--test"]),
+    # splicer --test 纯离线（构造合成序列跑四个必测场景 + 4 个边界），约 0.1s。
+    Check("splicer --test", "python", ["-m", "econ_core.splicer", "--test"]),
+    # splice-cpi 是**首次真实拼接**，要拉一次 BIS（网络）+ 读 validated 产物。
+    # 排最后：它读 data/validated/ 的 NBS CPI（由 materialize-validated 产），
+    # 且写 data/validated/spliced/。加它的理由 —— PROJECT_STATE 长期记着
+    # 「系统至今从未真正拼接」，而只跑 splicer --test 只能证明**合成**数据能拼；
+    # 真实链路上「两条序列真的接上了、断点真的被判出来了」只有跑这个脚本才算验过。
+    Check("splice-cpi", "python", ["tools/splice-cpi.py"], timeout_s=420),
 ]
 
 # --------------------------------------------------------------------------- #

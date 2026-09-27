@@ -316,15 +316,15 @@ def cache_path_for(url: str, method: str = "GET",
 
 
 def _decode_bytes(body: bytes, encoding: Optional[str], headers: Mapping[str, str]) -> str:
-    """把字节解码成文本。优先级：显式 encoding > Content-Type charset > utf-8 > gb18030。"""
+    """把字节解码成文本。优先级：显式 encoding > Content-Type charset > utf-8 > gb18030。
+
+    Content-Type 的查找走 :func:`_header_get`（大小写不敏感）—— 同一类坑，
+    见 §3.13。
+    """
     candidates: list[str] = []
     if encoding:
         candidates.append(encoding)
-    ctype = ""
-    for k, v in headers.items():
-        if k.lower() == "content-type":
-            ctype = v
-            break
+    ctype = _header_get(headers, "Content-Type", "") or ""
     if "charset=" in ctype.lower():
         candidates.append(ctype.lower().split("charset=", 1)[1].split(";")[0].strip().strip('"'))
     candidates += ["utf-8", "gb18030"]
@@ -340,7 +340,25 @@ def _decode_bytes(body: bytes, encoding: Optional[str], headers: Mapping[str, st
 
 
 def _decompress(body: bytes, content_encoding: Optional[str]) -> bytes:
-    """按 Content-Encoding 解压（仅内存中处理，不影响存档的原始字节）。"""
+    """按 Content-Encoding 解压（仅内存中处理，不影响存档的原始字节）。
+
+    **content_encoding 的取值必须由 :func:`_header_get` 传来**（大小写不敏感查找），
+    不要直接写 ``resp_headers.get("Content-Encoding")``。
+
+    为什么要在 docstring 里单说这一句：HTTP 头名本身是大小写不敏感的
+    （RFC 9110 §5.1），但服务器实际发什么大小写由它自己决定。实测 BIS
+    （FusionEdgeServer）回的是**全小写** ``content-encoding: gzip``，而
+    ``_headers_to_dict`` 用 ``msg.items()`` 原样搬运头名，于是旧代码
+    ``resp_headers.get("Content-Encoding")`` 取到 ``None`` -> 这里走
+    ``if not content_encoding: return body`` -> **不解压**，把 gzip 二进制
+    当明文交给 ``json.loads`` 而崩。凡返回小写头名的服务器都会中招。
+
+    行为约定（保持不变）：
+
+    * ``gzip`` / ``deflate``（含裸 deflate，即 zlib 头缺失时回退 ``-MAX_WBITS``）
+    * 解压失败**不抛异常**，记 warning 后按原始字节返回（采集不应被上游怪响应中断）
+    * 未知 Content-Encoding 同样记 warning 后按原始字节返回（当作明文处理）
+    """
     if not body or not content_encoding:
         return body
     ce = content_encoding.lower().strip()
@@ -357,6 +375,30 @@ def _decompress(body: bytes, content_encoding: Optional[str]) -> bytes:
         return body
     logger.warning("未知 Content-Encoding=%s，按原始字节返回。", ce)
     return body
+
+
+def _header_get(headers: Mapping[str, str], name: str,
+                default: Optional[str] = None) -> Optional[str]:
+    """**大小写不敏感**地从响应头里取值。
+
+    HTTP 头名按 RFC 9110 §5.1 是大小写不敏感的，但 ``_headers_to_dict`` 用
+    ``msg.items()`` 原样搬运服务器发来的大小写，所以必须统一在这里做不敏感查找。
+    实测踩坑：BIS 回全小写的 ``content-encoding`` / ``content-type``，
+    旧代码的 ``headers.get("Content-Encoding")`` 取到 None，导致 gzip 不解压
+    （见 :func:`_decompress` 的 docstring 与 PROJECT_STATE §3.13）。
+
+    :param headers: 响应头字典（键的大小写不可信）。
+    :param name: 要查的头名，任意大小写。
+    :param default: 没找到时的返回值。
+    :returns: 头值；没找到返回 ``default``。
+    """
+    if not headers:
+        return default
+    lowered = name.lower()
+    for k, v in headers.items():
+        if k.lower() == lowered:
+            return v
+    return default
 
 
 def _headers_to_dict(msg: Any) -> Headers:
@@ -565,15 +607,20 @@ def request(
             time.sleep(delay)
             continue
 
-        decoding = _decompress(wire, resp_headers.get("Content-Encoding"))
+        decoding = _decompress(wire, _header_get(resp_headers, "Content-Encoding"))
         used_encoding = None
         if encoding:
             used_encoding = encoding
-        elif "charset=" in resp_headers.get("Content-Type", "").lower():
-            used_encoding = (
-                resp_headers["Content-Type"].lower().split("charset=", 1)[1]
-                .split(";")[0].strip().strip('"')
-            )
+        else:
+            # 大小写不敏感查找：BIS 这类服务器回全小写的 content-type。
+            # 旧代码在这里写 resp_headers["Content-Type"] —— 头名小写时会直接 KeyError
+            # 让整次请求失败（比 contentType 取不到更严重）。
+            _ctype = _header_get(resp_headers, "Content-Type", "") or ""
+            if "charset=" in _ctype.lower():
+                used_encoding = (
+                    _ctype.lower().split("charset=", 1)[1]
+                    .split(";")[0].strip().strip('"')
+                )
 
         bin_path: Optional[Path] = None
         meta_path: Optional[Path] = None
