@@ -6,7 +6,7 @@
 
 权威性顺序（冲突时以序号小的为准）：
 
-1. 门禁 tools/run-all-checks.py 的**实际输出**（当前应为 16/16 PASS）——这是唯一硬标准
+1. 门禁 tools/run-all-checks.py 的**实际输出**（当前应为 17/17 PASS）——这是唯一硬标准
 2. 本文件
 3. 各模块 docstring —— 细节、实测证据、踩坑经过都写在那里
 
@@ -43,7 +43,8 @@
 - python/econ_core/missing.py —— 缺失检测与**四分类**：true_gap / not_yet_published / discontinued / series_start（判定优先级：先尾部 >=3 年，再尾部 <3 年，再头部，最后中段）
 - python/econ_core/fill_strategy.py —— 填补策略执行器：把决策写成行级元数据，**当前不执行任何插值**（出现 interpolate 直接抛 NotImplementedError）
 - python/econ_core/source_profiler.py —— 来源画像：profile_series / compare_profiles / explain_divergence（**本轮新增**）
-- python/econ_core/source_profiles.yaml —— **人工编纂**的来源画像知识库：3 个发布机构 + 10 条指标口径 + 18 个字段语义 + 口径家族表（**本轮新增**）
+- python/econ_core/source_profiles.yaml —— **人工编纂**的来源画像知识库：3 个发布机构 + 10 条指标口径 + 18 个字段语义 + 口径家族表
+- python/econ_core/arbiter.py —— 口径判定仲裁：把「画像判定」与「实测差异（读 cross_check 产物）」配成一条记录，给出 同口径 / 可桥接 / 不可拼接 / 人工复核 四值判定（**本轮新增**）
 
 **输出层**
 
@@ -55,7 +56,7 @@
 - python/_probes/README.md —— 逆向探测脚本索引与已知观察（NBS 接口考古、缓存键缺陷等）
 - PROJECT_STATE.md —— 本文件
 
-### 1.2 门禁：16 项（tools/run-all-checks.py，当前 16/16 PASS）
+### 1.2 门禁：17 项（tools/run-all-checks.py，当前 17/17 PASS）
 
 | # | 检查 | 类型 | 说明 |
 |---|---|---|---|
@@ -65,18 +66,19 @@
 | 4 | check-cli-envelope | python | 真跑 10 个子命令（11 用例）校验 stdout 信封契约 R1-R11；timeout 420s |
 | 5 | missing --test | python | 缺失四分类自检（纯离线，约 0.3s） |
 | 6 | source_profiler --test | python | 来源画像自检，8 个场景（纯离线，约 0.4s） |
-| 7 | normalize --test | python | 规范化层自检（含 row_sha16 唯一性、i_name null 补齐） |
-| 8 | cross_validation --test | python | 交叉验证四段阈值自检 |
-| 9 | compare-gdp | python | NBS vs World Bank 中国 GDP 端到端 |
-| 10 | compare-gdp-3way | python | NBS vs WB vs IMF 三方（汇率取自 WB PA.NUS.FCRF）；timeout 420s |
-| 11 | compare-gdp-real | python | NBS GDP 指数 vs IMF NGDP_RPCH 实际增速（无汇率污染） |
-| 12 | compare-unemployment | python | 登记失业率 / 调查失业率 / IMF LUR 三方（百分点） |
-| 13 | scan-missing | python | 缺失检测与分类扫描，产出 data/validated/missing_report.json；timeout 420s |
-| 14 | materialize-validated | python | 声明式清单落盘 data/validated/；timeout 420s |
-| 15 | run-fill-strategy | python | validated → processed（零填充，**已脱网**，约 0.4s） |
-| 16 | export | python | processed → CSV / SQLite / 数据字典（纯离线） |
+| 7 | arbiter --test | python | 口径判定自检，7 个场景（纯离线，约 0.3s） |
+| 8 | normalize --test | python | 规范化层自检（含 row_sha16 唯一性、i_name null 补齐） |
+| 9 | cross_validation --test | python | 交叉验证四段阈值自检 |
+| 10 | compare-gdp | python | NBS vs World Bank 中国 GDP 端到端 |
+| 11 | compare-gdp-3way | python | NBS vs WB vs IMF 三方（汇率取自 WB PA.NUS.FCRF）；timeout 420s |
+| 12 | compare-gdp-real | python | NBS GDP 指数 vs IMF NGDP_RPCH 实际增速（无汇率污染） |
+| 13 | compare-unemployment | python | 登记失业率 / 调查失业率 / IMF LUR 三方（百分点） |
+| 14 | scan-missing | python | 缺失检测与分类扫描，产出 data/validated/missing_report.json；timeout 420s |
+| 15 | materialize-validated | python | 声明式清单落盘 data/validated/；timeout 420s |
+| 16 | run-fill-strategy | python | validated → processed（零填充，**已脱网**，约 0.4s） |
+| 17 | export | python | processed → CSV / SQLite / 数据字典（纯离线） |
 
-门禁的运行顺序**有依赖**：materialize-validated（14）必须在 run-fill-strategy（15）之前（后者读前者落盘的文件）；export（16）最后。check-cli-envelope 与三个 compare 脚本是网络密集型，超时放宽到 420s。
+门禁的运行顺序**有依赖**：materialize-validated（15）必须在 run-fill-strategy（16）之前（后者读前者落盘的文件）；export（17）最后。check-cli-envelope 与三个 compare 脚本是网络密集型，超时放宽到 420s。
 
 ### 1.3 当前数据规模
 
@@ -101,12 +103,12 @@
 9. imf|LUR（起点 2017）
 10. NBS|000000000000|db8e5a86c08246e79b1b11251927e740（**别名**，指向第 1 条）
 
-### 1.4 最近一轮新增（方向 A 第一轮：来源画像）
+### 1.4 最近一轮新增（方向 A 第二轮：口径判定 Arbiter）
 
-- python/econ_core/source_profiles.yaml —— 知识库（人工编纂，不是自动抽取）
-- python/econ_core/source_profiler.py —— 三个接口 + 8 场景自检
-- tools/run-all-checks.py —— 门禁从 15 项加到 16 项
-- 环境变化：venv 里新装了 **PyYAML 6.0.3**（加载知识库需要）
+- python/econ_core/arbiter.py —— arbitrate_pair / arbitrate_all / write_arbiter_report + 7 场景自检
+- data/validated/arbiter/ —— 5 对判定 + _index.json（本轮新增产出目录）
+- tools/run-all-checks.py —— 门禁从 16 项加到 17 项
+- 上一轮（来源画像）：source_profiles.yaml 知识库 + source_profiler.py；venv 新装 PyYAML 6.0.3
 
 ---
 
@@ -325,7 +327,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
                                                                                 v
                                           (下一轮) Arbiter: 同口径 / 可桥接 / 不可拼接
 
-    横切: tools/run-all-checks.py —— 16 项门禁，任何改动后必跑
+    横切: tools/run-all-checks.py —— 17 项门禁，任何改动后必跑
 
 ### 4.2 每层职责与产物
 
@@ -356,26 +358,19 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 ## 5. 下一步待办
 
-### 5.1 方向 A 第二轮：口径判定 Arbiter（下一个要做的事）
+### 5.1 方向 A 第二轮：口径判定 Arbiter —— 已完成（本轮）
 
-目标：把「发现了分歧」升级成「说清分歧能不能拼」。
+- 产出：python/econ_core/arbiter.py；判定报告落盘 data/validated/arbiter/（5 对 + _index.json）
+- 实测差异**不重跑取数**，直接读 data/validated/cross_check/*.json；可识别 4 种形状，认不出就跳过记 warning
+- 判定优先级：高影响 unknown（statistical_method / coverage / population_scope）-> 人工复核；低影响 unknown -> 保留原判定并记 knowledge_gaps
+- 本轮结果：可桥接 2 / 同口径 2 / 不可拼接 1；gdp_real 那对的两个序列不在知识库，已跳过（warning）
+- 遗留：verdict 取自画像、recommended_action 取自实测归因，二者可能不同调（见 5.4）
 
-- **输入**：python/econ_core/source_profiler.compare_profiles 的输出（comparable / differences / shared_attributes / unknown_fields / reasoning）
-- **输出**：同口径 / 可桥接 / 不可拼接 三值判定 + 差异点清单（可直接喂给报告层）
-- **已就位的基础**：
-  - 知识库的 families 段（method / coverage / scope 三类口径家族）——Arbiter 不必再做字符串模糊匹配
-  - compare_profiles 已经把「知识缺口（unknown_fields）」与「口径分歧（differences）」分开
-- **必须遵守**：unknown_fields 要**降级为人工复核**，既不能当成「一致」，也不能当成「冲突」
-- **现成测试样本**（可直接当用例）：
-  - nbs|registered_unemployment vs imf|LUR —— 应判不可拼接（行政记录 vs 抽样调查，实测差 1.1-1.6 pp）
-  - nbs|surveyed_unemployment vs imf|LUR —— 应判同口径（实测 ±0.05 pp，7/7 年一致）
-  - nbs|gdp|cny_100m vs worldbank|NY.GDP.MKTP.CN —— 应判同源复述（逐字节相同）
-  - nbs|gdp|cny_100m vs imf|NGDPD —— 美元口径差 0.2%-1.1%，但实然增速完全一致，属换算差异而非水平差异
-
-### 5.2 方向 A 第三轮：可信度评分
+### 5.2 方向 A 第三轮：可信度评分（下一个要做的事）
 
 - 三个维度：Expertise（专业能力）/ Coherence（自洽性）/ Goodwill（善意与可追溯性）
 - 数据基础：source_profiles.yaml 的 authority_level / license / revision_policy，以及 row_sha16 加 raw_cache 构成的证据链
+- 消费方：先拿 arbiter 的 verdict 定口径，再给数字打可信度分（口径没判清的数字不打分）
 
 ### 5.3 之后（优先级待定）
 
@@ -388,6 +383,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 - aggregated_from_months 只存在于 validated / processed 的 JSON 层，**不在 CSV / SQLite 里**（输出层 14 列是定案集合，export.py 未改）。要它可见就追加为第 15 列，或折进 missing_evidence
 - compare-gdp-3way 的 timeout 已放宽到 420s，但实测波动大（16.5s -> 85.1s），若再变慢要考虑拆项
+- arbiter 的 verdict 与 recommended_action 可能不同调：gdp × imf|NGDPD 判「可桥接」（medium），但 explain_divergence 因差异小于 0.1 判 noise -> splice。两个字段各自独立，暂不强行统一
 
 ---
 
@@ -401,7 +397,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 | 文件 | 一句话职责 |
 |---|---|
-| run-all-checks.py | 门禁总入口：顺序跑 16 项检查，失败即停；支持逐检查 timeout 覆盖 |
+| run-all-checks.py | 门禁总入口：顺序跑 17 项检查，失败即停；支持逐检查 timeout 覆盖 |
 | check-cli-envelope.py | 契约测试：真跑 10 个子命令（11 用例），按 R1-R11 校验 stdout 信封；超时 420s |
 | smoke-nbs-adapter.mjs | NBS 插件冒烟：桩替换 execFile，验证 argv 与必填校验 |
 | smoke-worldbank-adapter.mjs | World Bank 插件冒烟（含 wantArgv 精确比对） |
@@ -470,15 +466,15 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
        cd D:\universe\econ-data-harvester
        .\.venv\Scripts\python.exe tools\run-all-checks.py
 
-   期望 16/16 PASS，exit 0。若不是 16/16，先定位是哪一项退化了，不要继续叠加改动。
+   期望 17/17 PASS，exit 0。若不是 17/17，先定位是哪一项退化了，不要继续叠加改动。
 4. 报告状态：门禁结果、git status、当前数据规模（9 条声明式序列 / 152 行 / 10 缺失行），然后停下等指令
 
 ### 7.1 报告模板（建议照抄）
 
-    门禁：16/16 PASS（exit 0）
+    门禁：17/17 PASS（exit 0）
     working tree：<git status --short 的内容>
     数据：9 条声明式序列 / 152 行 / 10 缺失行（按行：series_start 5, discontinued 3, not_yet_published 2, true_gap 0）
-    下一步待办：方向 A 第二轮「口径判定 Arbiter」
+    下一步待办：方向 A 第三轮「可信度评分」
 
 ### 7.2 开工前的三条自检
 
@@ -488,7 +484,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 ### 7.3 改动后的固定动作
 
-1. 跑完整门禁，确认仍 16/16（新增检查要同步加进 CHECKS 与 docstring 编号）
+1. 跑完整门禁，确认仍 17/17（新增检查要同步加进 CHECKS 与 docstring 编号）
 2. 新增序列 -> 补 source_profiles.yaml 条目（否则 profiler 抛 KeyError）
 3. 改契约/分类/字段名 -> 同步更新本文件的第 2 节与第 3 节
 4. 不要把 data/ 下的产物提交进 git（它们已被忽略）；不要把 raw 存档删掉（那是证据链）

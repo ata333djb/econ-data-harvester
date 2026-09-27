@@ -23,16 +23,17 @@
 4. python tools/check-cli-envelope.py                  （真跑 CLI 的信封契约）
 5. python -m econ_core.missing --test                  （缺失分类自检，纯离线 0.1s）
 6. python -m econ_core.source_profiler --test          （来源画像自检，纯离线 0.2s）
-7. python -m econ_core.normalize --test                （规范化层自检）
-8. python -m econ_core.cross_validation --test         （交叉验证自检）
-9. python tools/compare-gdp.py                         （NBS vs World Bank 端到端）
-10. python tools/compare-gdp-3way.py                    （NBS vs WB vs IMF 三方交叉验证）
-11. python tools/compare-gdp-real.py                    （NBS vs IMF 实际增速，无汇率污染）
-12. python tools/compare-unemployment.py               （失业率三方：登记/调查 vs IMF LUR）
-13. python tools/scan-missing.py                       （缺失检测与分类）
-14. python tools/materialize-validated.py              （声明式清单落盘 validated）
-15. python tools/run-fill-strategy.py                  （填补策略执行器：只 leave_null/wait）
-16. python tools/export.py                             （导出 CSV + SQLite + 数据字典）
+7. python -m econ_core.arbiter --test                  （口径判定自检，纯离线 0.3s）
+8. python -m econ_core.normalize --test                （规范化层自检）
+9. python -m econ_core.cross_validation --test         （交叉验证自检）
+10. python tools/compare-gdp.py                         （NBS vs World Bank 端到端）
+11. python tools/compare-gdp-3way.py                    （NBS vs WB vs IMF 三方交叉验证）
+12. python tools/compare-gdp-real.py                    （NBS vs IMF 实际增速，无汇率污染）
+13. python tools/compare-unemployment.py               （失业率三方：登记/调查 vs IMF LUR）
+14. python tools/scan-missing.py                       （缺失检测与分类）
+15. python tools/materialize-validated.py              （声明式清单落盘 validated）
+16. python tools/run-fill-strategy.py                  （填补策略执行器：只 leave_null/wait）
+17. python tools/export.py                             （导出 CSV + SQLite + 数据字典）
 
 约定
 ----
@@ -107,6 +108,9 @@ CHECKS: list[Check] = [
     # source_profiler --test 同样纯离线（读知识库 YAML + 读已有 validated 文件），0.2s 级
     Check("source_profiler --test", "python",
           ["-m", "econ_core.source_profiler", "--test"]),
+    # arbiter --test 也是纯离线（读知识库 + 读 cross_check 产物），0.3s 级；
+    # 它把画像判定与实测差异配成一条记录，见 python/econ_core/arbiter.py
+    Check("arbiter --test", "python", ["-m", "econ_core.arbiter", "--test"]),
     Check("normalize --test", "python", ["-m", "econ_core.normalize", "--test"]),
     Check("cross_validation --test", "python",
           ["-m", "econ_core.cross_validation", "--test"]),
