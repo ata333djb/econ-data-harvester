@@ -154,14 +154,18 @@ def _canonical(key: str) -> str:
 # --------------------------------------------------------------------------- #
 
 def ensure_inputs() -> list[str]:
-    """检查 arbiter / credibility 报告目录；缺失就补生成。返回做过的事。"""
+    """检查 arbiter / credibility 报告目录；缺失就补生成（并在 stderr 留一行日志）。"""
     done: list[str] = []
     if not (ARBITER_DIR / "_index.json").is_file():
         arbiter.write_arbiter_report()
-        done.append("补生成 data/validated/arbiter/（arbiter.write_arbiter_report）")
+        n = len((_load(ARBITER_DIR / "_index.json") or {}).get("pairs") or [])
+        print(f"[auto-generated] arbiter report (was missing, {n} pairs)", file=sys.stderr)
+        done.append(f"补生成 arbiter 报告（{n} 对）")
     if not (CREDIBILITY_DIR / "_index.json").is_file():
         credibility.write_credibility_report()
-        done.append("补生成 data/validated/credibility/（credibility.write_credibility_report）")
+        n = len((_load(CREDIBILITY_DIR / "_index.json") or {}).get("series") or [])
+        print(f"[auto-generated] credibility report (was missing, {n} series)", file=sys.stderr)
+        done.append(f"补生成 credibility 报告（{n} 条）")
     return done
 
 
@@ -340,6 +344,154 @@ def _diff_text(value: Any, diff_type: str) -> str:
     return f"{d * 100:.2f}%" if diff_type == "percent" else f"{d:.2f} pp"
 
 
+
+
+# --------------------------------------------------------------------------- #
+# 数据血缘（任务 D）与下载清单（任务 E）
+# --------------------------------------------------------------------------- #
+
+LINEAGE_SERIES = "nbs|gdp|cny_100m"
+CSV_PATH: Path = http_client.PROJECT_ROOT / "data" / "output" / "econ_data.csv"
+
+
+def _file_info(path: Optional[Path]) -> dict[str, Any]:
+    """文件路径 / mtime / 大小（不存在时 exists=False，展示成 —）。"""
+    if not path:
+        return {"path": "—", "exists": False, "size": None, "mtime": None, "size_text": "—"}
+    p = Path(path)
+    try:
+        st = p.stat()
+    except OSError:
+        return {"path": _rel(p), "exists": False, "size": None, "mtime": None,
+                "size_text": "—"}
+    return {
+        "path": _rel(p),
+        "exists": True,
+        "size": st.st_size,
+        "size_text": f"{st.st_size / 1024:.1f} KB",
+        "mtime": datetime.fromtimestamp(st.st_mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
+def _csv_row_for(row_sha16: str, period: str) -> Optional[dict[str, Any]]:
+    """在导出的 CSV 里按 row_sha16 + period 找那一行（证明 CSV 与长表逐行对得上）。"""
+    if not row_sha16:
+        return None
+    import csv as _csv
+    try:
+        with CSV_PATH.open(encoding="utf-8-sig", newline="") as fh:
+            for r in _csv.DictReader(fh):
+                if r.get("row_sha16") == row_sha16 and r.get("period") == period:
+                    return r
+    except OSError:
+        return None
+    return None
+
+
+def build_lineage(series_key: str = LINEAGE_SERIES) -> dict[str, Any]:
+    """一条序列从原始 HTTP 到最终 CSV 行的完整链路。
+
+    两个要点（都写进报告里）：
+    * parsed 文件名后缀是**请求指纹**，与 raw 的 .bin 文件名不同；回溯靠 parsed 文件里的
+      raw_cache 字段，不是靠文件名。
+    * 第 3 步与第 5 步的 row_sha16 必须完全一致——那是「CSV 里的数字就是长表里的数字」的凭证。
+    """
+    profile = source_profiler.profile_series(series_key)
+    canon = str(profile["series_key"])
+    lineage = profile.get("data_lineage") or {}
+    validated_path = lineage.get("series_file")
+    vobj = _load(PROJECT_ROOT / str(validated_path)) if validated_path else None
+    vrows = [r for r in ((vobj or {}).get("rows") or []) if isinstance(r, dict)]
+    row = next((r for r in vrows if r.get("value") is not None), None)
+    if row is None and vrows:
+        row = vrows[0]
+    row = row or {}
+    raw_path = str(row.get("raw_cache") or "")
+    raw = Path(raw_path) if raw_path else None
+
+    parsed: Optional[Path] = None
+    if raw_path:
+        for cand in sorted((http_client.PROJECT_ROOT / "data" / "parsed").glob("*/*.json")):
+            if str((_load(cand) or {}).get("raw_cache") or "") == raw_path:
+                parsed = cand
+                break
+
+    proc: Optional[Path] = None
+    for cand in sorted(PROCESSED_DIR.glob("*/*.json")):
+        obj = _load(cand) or {}
+        key = str(((obj.get("missing_report") or {}).get("series_key")) or "")
+        if not key or _canonical(key) != canon:
+            continue
+        # 同一条序列可能有多个 processed 文件（alias 副本）；
+        # 优先取「键本身就是规范键」的那个，别把 alias 副本当血缘终点
+        if key == canon:
+            proc = cand
+            break
+        if proc is None:
+            proc = cand
+
+    csv_row = _csv_row_for(str(row.get("row_sha16") or ""), str(row.get("period") or ""))
+    stem = raw.stem if raw else ""
+    csv_info = _file_info(CSV_PATH)
+
+    steps = [
+        {"step": "1 原始 HTTP 响应",
+         "file": _file_info(raw),
+         "detail": (f"指纹（url+method+body 的 sha256，文件名前 12 位：{stem[:12]}…）"
+                    if stem else "没有 raw_cache 字段"),
+         "note": "从 data.stats.gov.cn 拿到的未改动原文，本项目所有结论的最终证据"},
+        {"step": "2 解析为 JSON",
+         "file": _file_info(parsed),
+         "detail": ("parsed 后缀是请求指纹，与 raw 文件名不同；靠文件里的 raw_cache 字段回溯"
+                    if parsed else "没有找到 raw_cache 指向同一个 .bin 的 parsed 文件"),
+         "note": "原始字节 -> 结构化观测（数字仍来自上游，未加工）"},
+        {"step": "3 规范化为长表",
+         "file": _file_info(PROJECT_ROOT / str(validated_path) if validated_path else None),
+         "detail": f"{len(vrows)} 行；每行都有 row_sha16 指纹",
+         "note": "统一成 14 列 schema；row_sha16 = 该行去掉指纹字段后规范化 JSON 的 sha256 前 16 位"},
+        {"step": "4 打上缺失元数据",
+         "file": _file_info(proc),
+         "detail": "processed 信封里有 decisions（每个缺口的处置决策）与 processed_at",
+         "note": "标注哪一年缺、属于哪一类、为什么不补；数值本身一个都没动"},
+        {"step": "5 导出到 CSV",
+         "file": csv_info,
+         "detail": (f"示例行：period={csv_row.get('period')} value={csv_row.get('value')} "
+                    f"row_sha16={csv_row.get('row_sha16')}（与第 3 步一致）")
+                    if csv_row else "没有在 CSV 里找到这一行（可能还没跑 export）",
+         "note": "发布给外部使用的形态；row_sha16 与第 3 步逐行一致，可以核对"},
+    ]
+    return {
+        "series_key": canon,
+        "display_name": str(profile["indicator"].get("display_name") or canon),
+        "steps": steps,
+        "sample": {"period": row.get("period"), "value": row.get("value"),
+                   "unit": row.get("unit"), "row_sha16": row.get("row_sha16"),
+                   "fetched_at": row.get("fetched_at")},
+    }
+
+
+def build_downloads() -> dict[str, Any]:
+    """页脚之前的三份产物清单（大小 + 更新时间，路径相对项目根）。"""
+    items = [
+        {"name": "econ_data.csv", "desc": "长表 CSV（utf-8-sig，Excel 可直接打开）"},
+        {"name": "econ_data.db", "desc": "SQLite（observations 表 + series_summary 视图）"},
+        {"name": "data_dictionary.md", "desc": "Markdown 数据字典（14 列语义 + 缺失字段说明）"},
+    ]
+    files = []
+    for it in items:
+        info = _file_info(PROJECT_ROOT / "data" / "output" / it["name"])
+        info.update(it)
+        files.append(info)
+    n_csv = 0
+    try:
+        import csv as _csv
+        with CSV_PATH.open(encoding="utf-8-sig", newline="") as fh:
+            n_csv = sum(1 for _ in _csv.DictReader(fh))
+    except OSError:
+        n_csv = 0
+    return {"files": files, "csv_rows": n_csv}
+
+
 def build_context() -> dict[str, Any]:
     """读全部输入，算出模板要用的所有数字与行。"""
     series = load_series()
@@ -459,12 +611,10 @@ def build_context() -> dict[str, Any]:
 
     # ---- [8] 页脚 ----
     gate = _load(GATE_STATUS_PATH)
-    gate_text = "unknown（未找到 data/output/last_gate.json）"
-    if isinstance(gate, dict):
-        gate_text = (
-            f"{gate.get('passed', '?')} / {gate.get('total', '?')} PASS"
-            f"（{gate.get('elapsed_s', '?')}s）"
-        )
+    gate_text = "unknown（运行 run-all-checks.py 可更新）"
+    if isinstance(gate, dict) and gate.get("n_total"):
+        gate_text = (f"{gate.get('n_pass', '?')}/{gate.get('n_total', '?')} PASS"
+                     f" @ {gate.get('ran_at', '?')} ({gate.get('elapsed_s', '?')}s)")
 
     return {
         "title": TITLE,
@@ -496,6 +646,8 @@ def build_context() -> dict[str, Any]:
                 "python/econ_core/source_profiles.yaml（许可证）",
             ],
         },
+        "lineage": build_lineage(),
+        "downloads": build_downloads(),
         "dim_names": [DIMENSION_CN[k] for k in DIMENSIONS],
     }
 
@@ -549,6 +701,12 @@ details summary { cursor:pointer; color:#1a73e8; font-size:12px; margin-top:4px;
 .ev { margin:4px 0 0 16px; padding:0; }
 .ev li { font-size:12px; color:var(--muted); }
 .exp { font-size:12px; color:var(--muted); margin-top:4px; }
+.chain { display:flex; flex-wrap:wrap; gap:6px; align-items:stretch; }
+.node { flex:1 1 178px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+.node-idx { font-weight:600; font-size:13px; color:#1a73e8; }
+.node-path { font-size:12px; color:var(--ink); word-break:break-all; margin:3px 0; }
+.node-detail { font-size:12px; color:var(--muted); margin-top:4px; }
+.arrow { align-self:center; color:var(--muted); font-size:18px; }
 </style>
 </head>
 <body>
@@ -636,7 +794,7 @@ details summary { cursor:pointer; color:#1a73e8; font-size:12px; margin-top:4px;
           <td>{{ p.diff }}<div class="k">{{ p.diff_type }}</div></td>
           <td>{{ p.attribution }}<div class="k">{{ p.alignment }}</div></td>
           <td>{{ p.action }}<div class="k">可比性 {{ p.comparable }}</div>
-            <div class="exp">{{ p.explanation }}</div></td>
+            <div class="exp">{{ p.explanation | bold }}</div></td>
         </tr>
       {% endfor %}
       </tbody>
@@ -689,6 +847,62 @@ details summary { cursor:pointer; color:#1a73e8; font-size:12px; margin-top:4px;
     </table>
   </section>
 
+  <section id="lineage">
+    <h2>七、数据血缘：一个数字从哪来</h2>
+    <p class="hint">以 <strong>{{ lineage.display_name }}</strong>（<span class="k">{{ lineage.series_key }}</span>）为例，
+      一个数字从原始 HTTP 响应到最终 CSV 行要过 5 步，每一步都留了文件和指纹。所谓「可追溯」就是这条链能一步步走回去。</p>
+    <div class="chain">
+      {% for s in lineage.steps %}
+      <div class="node">
+        <div class="node-idx">{{ s.step }}</div>
+        <div class="node-path">{{ s.file.path }}</div>
+        <div class="k">{{ s.file.mtime or '—' }} · {{ s.file.size_text }}</div>
+        <div class="node-detail">{{ s.detail }}</div>
+      </div>
+      {% if not loop.last %}<div class="arrow">&rarr;</div>{% endif %}
+      {% endfor %}
+    </div>
+    <table style="margin-top:14px">
+      <thead><tr><th>步骤</th><th>文件（相对项目根）</th><th>生成时间</th><th>大小</th><th>这一步做了什么</th></tr></thead>
+      <tbody>
+      {% for s in lineage.steps %}
+        <tr data-lineage-step="{{ loop.index }}">
+          <td>{{ s.step }}</td>
+          <td class="k">{{ s.file.path }}</td>
+          <td class="k">{{ s.file.mtime or '—' }}</td>
+          <td>{{ s.file.size_text }}</td>
+          <td class="k">{{ s.note }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="hint">示例行（第 3 步长表里的第一行有值数据）：period={{ lineage.sample.period or '—' }} ·
+      value={{ lineage.sample.value if lineage.sample.value is not none else '—' }} {{ lineage.sample.unit or '' }} ·
+      row_sha16=<span class="k">{{ lineage.sample.row_sha16 or '—' }}</span> · fetched_at={{ lineage.sample.fetched_at or '—' }}</p>
+  </section>
+
+  <section id="downloads">
+    <h2>八、数据下载</h2>
+    <p class="hint">报告之外的三份可直接使用的产物，都在 <span class="k">data/output/</span> 下（路径相对项目根）。打开需自备工具：CSV 用 Excel，DB 用任意 SQLite 客户端。</p>
+    <table>
+      <thead><tr><th>文件</th><th>说明</th><th>大小</th><th>更新时间</th></tr></thead>
+      <tbody>
+      {% for f in downloads.files %}
+        <tr data-download="{{ f.name }}">
+          <td><strong>{{ f.name }}</strong><div class="k">{{ f.path }}</div></td>
+          <td>{{ f.desc }}</td>
+          <td>{{ f.size_text }}</td>
+          <td class="k">{{ f.mtime or '—' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="note"><strong>CSV 行数与总览不一致是正常的</strong>：CSV 现有 {{ downloads.csv_rows }} 行，
+      而「一、总览」说的 142 行是<strong>按序列去重后</strong>的观测数。export 层把 alias 副本
+      <span class="k">nbs|000000000000|db8e…</span>（与 nbs|gdp|cny_100m 是同一条 GDP 序列）也导出了一遍，
+      所以 CSV 多出 10 行。数据本身没错，但用 CSV 做统计前建议按 series_key 去重。</p>
+  </section>
+
   <footer>
     <div><strong>{{ footer.generator }}</strong> &middot; 项目路径 <span class="k">{{ footer.project_root }}</span></div>
     <div>门禁状态：{{ footer.gate }}</div>
@@ -727,6 +941,21 @@ def _require_jinja2():
     return jinja2
 
 
+def _bold(text: Any) -> Any:
+    """把上游解释文本里的 **粗体** 转成 <strong>（其余内容照常转义）。
+
+    source_profiler 的 explanation 是给人读的纯文本、里面带 markdown 粗体；
+    直接塞进 HTML 会把星号原样显示出来。
+    """
+    import html as _html
+    from markupsafe import Markup
+    out = _html.escape(str(text or ""))
+    while out.count("**") >= 2:
+        out = out.replace("**", "<strong>", 1).replace("**", "</strong>", 1)
+    out = out.replace("**", "")
+    return Markup(out)
+
+
 def render_html(ctx: dict[str, Any]) -> str:
     """渲染模板。autoescape 打开；None 统一渲染成「—」。"""
     jinja2 = _require_jinja2()
@@ -736,6 +965,7 @@ def render_html(ctx: dict[str, Any]) -> str:
         lstrip_blocks=True,
         finalize=lambda v: "—" if v is None else v,
     )
+    env.filters["bold"] = _bold
     return env.from_string(TEMPLATE).render(**ctx)
 
 

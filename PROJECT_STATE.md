@@ -108,12 +108,12 @@
 9. imf|LUR（起点 2017）
 10. NBS|000000000000|db8e5a86c08246e79b1b11251927e740（**别名**，指向第 1 条）
 
-### 1.4 最近一轮新增（方向 D 第一轮：HTML 质量报告）
+### 1.4 最近一轮新增（方向 D 第二轮：血缘与真实门禁状态）
 
-- tools/report.py —— 5 份 JSON -> 单文件 HTML（data/output/report.html，约 39.6KB，8 节）+ 7 项自检；Jinja2 模板 + Plotly 走 CDN
-- source_profiles.yaml —— publishers 段补 commercial_use / redistribution（HTML 许可证表要用）
-- **修正一个长期错误**：总行数一直写的 152 是**重复计数**（alias 副本被算了两遍），实际 **142** 行
-- tools/run-all-checks.py —— 门禁从 18 项加到 19 项
+- tools/run-all-checks.py —— 结束时写 data/output/last_gate.json（成功失败都写，未跑的检查标 skip）
+- tools/report.py —— 新增「七、数据血缘」（nbs|gdp|cny_100m 五步链路）与「八、数据下载」两节；页脚读真实门禁状态；补生成时打 stderr 日志
+- 报告 39.6KB -> 45.4KB；**CSV 的 152 行与总览 142 行的差异已在报告内写明**（export 层重复导出 alias 副本，按 series_key 去重即可）
+- 上一轮修正的长期错误：总行数 152 是重复计数，去重后 142
 
 ---
 
@@ -448,7 +448,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 | data/validated/{arbiter,credibility}/ | 口径判定报告（6 对）/ 可信度评分报告（11 条） |
 | data/validated/cross_check/ | 三个对比脚本的结果 JSON |
 | data/processed/{nbs,worldbank,imf}/ | 带缺失元数据的行（10 个文件） |
-| data/output/ | 产品：econ_data.csv / econ_data.db / data_dictionary.md / **report.html** |
+| data/output/ | 产品：econ_data.csv / econ_data.db / data_dictionary.md / **report.html** / last_gate.json（最近一次门禁状态） |
 
 ### 6.6 项目根其他文件
 

@@ -52,15 +52,20 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
+
+#: 最近一次门禁结果的落盘位置（tools/report.py 的页脚读它）
+GATE_STATUS_PATH: Path = PROJECT_ROOT / "data" / "output" / "last_gate.json"
 
 #: 项目 venv 解释器（绝对路径，与插件/契约测试同一约定）
 PYTHON: str = r"D:\universe\econ-data-harvester\.venv\Scripts\python.exe"
@@ -234,6 +239,35 @@ def _format_argv(argv: list[str]) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# 状态落盘
+# --------------------------------------------------------------------------- #
+
+def _write_gate_status(records: list[dict[str, object]], n_pass: int, total: int,
+                       elapsed_total: float) -> Optional[Path]:
+    """把本次门禁结果落盘（成功、失败都写），供 tools/report.py 的页脚读。
+
+    注意时序：它在本进程**结束时**才写，而同一次运行里的 report（第 19 项）排在
+    它前面，所以报告页脚读到的是**上一次**门禁的结果。这是刻意保留的——页脚会连
+    ran_at 一起显示，比编一个「本次」状态诚实。
+    """
+    obj = {
+        "ran_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "n_pass": n_pass,
+        "n_total": total,
+        "elapsed_s": round(elapsed_total, 1),
+        "checks": records,
+    }
+    try:
+        GATE_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        GATE_STATUS_PATH.write_text(json.dumps(obj, ensure_ascii=False, indent=2),
+                                    encoding="utf-8")
+    except OSError as exc:
+        print(f"[gate] 写 {GATE_STATUS_PATH} 失败: {exc}", file=sys.stderr)
+        return None
+    return GATE_STATUS_PATH
+
+
+# --------------------------------------------------------------------------- #
 # 主流程
 # --------------------------------------------------------------------------- #
 
@@ -247,6 +281,7 @@ def main() -> int:
     node_path = shutil.which("node")
     n_pass = 0
     elapsed_total = 0.0
+    records: list[dict[str, object]] = []
 
     for index, check in enumerate(CHECKS, 1):
         argv, build_err = build_argv(check, node_path)
@@ -255,6 +290,9 @@ def main() -> int:
         else:
             result = run_check(argv, check.timeout_s or TIMEOUT_S)
         elapsed_total += result.elapsed
+        records.append({"name": check.name,
+                        "status": "pass" if result.ok else "fail",
+                        "elapsed_s": round(result.elapsed, 2)})
 
         print(check_line(index, total, check.name, verdict_text(result)))
 
@@ -274,12 +312,20 @@ def main() -> int:
         print("-" * 72)
         print()
         print("─" * RULE_WIDTH)
+        for later in CHECKS[index:]:
+            records.append({"name": later.name, "status": "skip", "elapsed_s": 0.0})
+        _write_gate_status(records, n_pass, total, elapsed_total)
+
         print(f"{n_pass}/{total} PASS, 1 FAIL, stopped at [{index}/{total}]  "
               f"({elapsed_total:.1f}s)")
+        print(f"状态已写入 {GATE_STATUS_PATH.relative_to(PROJECT_ROOT).as_posix()}（FAIL 也写）")
         return 1
+
+    _write_gate_status(records, n_pass, total, elapsed_total)
 
     print("─" * RULE_WIDTH)
     print(f"{n_pass}/{total} PASS ({elapsed_total:.1f}s)")
+    print(f"状态已写入 {GATE_STATUS_PATH.relative_to(PROJECT_ROOT).as_posix()}")
     return 0
 
 
