@@ -26,6 +26,7 @@
 7. python tools/compare-gdp.py                         （NBS vs World Bank 端到端）
 8. python tools/compare-gdp-3way.py                    （NBS vs WB vs IMF 三方交叉验证）
 9. python tools/compare-gdp-real.py                    （NBS vs IMF 实际增速，无汇率污染）
+10. python tools/compare-unemployment.py               （失业率三方：登记/调查 vs IMF LUR）
 
 约定
 ----
@@ -101,6 +102,7 @@ CHECKS: list[Check] = [
     Check("compare-gdp", "python", ["tools/compare-gdp.py"]),
     Check("compare-gdp-3way", "python", ["tools/compare-gdp-3way.py"]),
     Check("compare-gdp-real", "python", ["tools/compare-gdp-real.py"]),
+    Check("compare-unemployment", "python", ["tools/compare-unemployment.py"]),
 ]
 
 # --------------------------------------------------------------------------- #
