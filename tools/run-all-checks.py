@@ -41,6 +41,8 @@
 22. python tools/report.py --test                      （单文件 HTML 质量报告 + 7 项自检，纯离线）
 23. python -m econ_core.splicer --test                 （拼接器自检，纯离线）
 24. python tools/splice-cpi.py                         （首次真实拼接：BIS 年化 ⊗ NBS 年度 CPI）
+25. python -m econ_core.catalog --test                 （指标目录自检，纯离线）
+26. python tools/edh.py list                           （用户 CLI：列出指标，纯离线）
 
 约定
 ----
@@ -161,6 +163,14 @@ CHECKS: list[Check] = [
     # 「系统至今从未真正拼接」，而只跑 splicer --test 只能证明**合成**数据能拼；
     # 真实链路上「两条序列真的接上了、断点真的被判出来了」只有跑这个脚本才算验过。
     Check("splice-cpi", "python", ["tools/splice-cpi.py"], timeout_s=420),
+    # catalog --test 纯离线（只读 python/econ_core/catalog_data.yaml），毫秒级。
+    # 它守的是**指标目录的结构不变量**：18 指标 / 51 源映射、别名全局唯一、
+    # 每个源的必需键齐全、变体标注就位。清单是人工维护的，这些断言是它唯一的防漏网。
+    Check("catalog --test", "python", ["-m", "econ_core.catalog", "--test"]),
+    # edh list 是**用户产品层的第一条命令**，纯离线。它比 catalog --test 多验一层：
+    # argparse 装配、CJK 宽度对齐、stdout 渲染、退出码 —— 这些是"用户真的跑得起来"的部分，
+    # 单元自检覆盖不到。放在 catalog --test 之后：结构坏了先报结构错，别先报渲染错。
+    Check("edh list", "python", ["tools/edh.py", "list"]),
 ]
 
 # --------------------------------------------------------------------------- #

@@ -229,3 +229,59 @@ cd D:\universe\econ-data-harvester
 **正确的方向是把验证目标从「CPI」换成「价格水平」**，因为独立测量**存在**，只是不在 CPI 维度：
 世界银行 **ICP 2021** 是唯一真·独立价格采集（各经济体自己采集一篮子代表品，中国参加了
 2021 轮，NBS 2024-05 自行发布过结果）。单独立项，见 PROJECT_STATE §5.3。
+
+---
+
+## 2026-09-27 探测：指标目录的源可达性（`probe_catalog_sources.py`）
+
+**探测动机**：方向 E 第一轮要做「用户输入指标名 -> 得到数据」，第一层是指标目录
+（`../econ_core/catalog_data.yaml`）。目录里每一条「某指标在某源上要什么参数」
+都必须是**真跑过取数**的结论，不能靠猜代码或抄文档。
+
+**用法**（8 个阶段，可单跑）：
+
+```powershell
+$env:PYTHONPATH="D:\universe\econ-data-harvester\python"
+.\.venv\Scripts\python.exe python\_probes\probe_catalog_sources.py nbs        # 拉三棵目录树
+.\.venv\Scripts\python.exe python\_probes\probe_catalog_sources.py nbs_targets # 18 指标候选三元组
+.\.venv\Scripts\python.exe python\_probes\probe_catalog_sources.py wb         # WB 全量目录 29544 条
+.\.venv\Scripts\python.exe python\_probes\probe_catalog_sources.py imf|bis|fred
+.\.venv\Scripts\python.exe python\_probes\probe_catalog_sources.py verify     # 终验：真跑 56 次取数
+.\.venv\Scripts\python.exe python\_probes\probe_catalog_sources.py diag_range # 停更序列的精确停更期
+.\.venv\Scripts\python.exe python\_probes\probe_catalog_sources.py diag_wb    # 宽窗口复核
+```
+
+**结论速查**
+
+| 项 | 结论 |
+|---|---|
+| NBS 目录树规模 | 月度 **14605** 叶 / 季度 **799** / 年度 **60325**，拍平后 78946 个节点 |
+| NBS `root_id` | **不是**指标的祖先，而是「该目录第一条 level-2 类目」的常量：月 `3c9c4593…` / 季 `1b1ce0cf…` / 年 `71d41888…` |
+| NBS `cid` | = 指标叶的 `treeinfo_pid`（父目录节点）；取数时后端忽略（§3.1），取目录树要用 |
+| World Bank | 全量目录 **29544** 条（2 页 × 20000）；服务端**不支持搜索**，只能整份取回本地过滤 |
+| IMF | DataMapper 目录 **132** 条，本轮全量列出 |
+| BIS | **32** 个 dataflow；只有 `WS_LONG_CPI` 找到中国可用密钥（`M.CN.771` / `M.CN.628` / `A.CN.771`），其余 9 个候选密钥全 404（第三维 `UNIT_MEASURE` 各家不同，未逐个解析 datastructure） |
+| FRED | **无免密钥搜索**，只能按候选 ID 试：12 个里 11 个可用 |
+| 终验结果 | **53 条可取数 / 3 条确认不可用 / 0 条意外失败** |
+
+**三条「探过、确认不可用」**（已留痕未收录，标 `expect_unavailable`）：
+
+| 映射 | 实测 |
+|---|---|
+| `imf\|BX_GDP`（出口占 GDP 比重） | 对 CHN 返回 **0 行** |
+| `imf\|BM_GDP`（进口占 GDP 比重） | 对 CHN 返回 **0 行** |
+| `worldbank\|GC.DOD.TOTL.GD.ZS`（中央政府债务） | 1960-2025 共 66 行**全为 null** |
+
+**一条「有数据但已停更」**：NBS `实际利用外商直接投资金额累计值` ——
+2014-01..**2019-11** 共 71 个非空期（末值 124394），2020-01 起全部是占位行。
+
+**本轮最大的方法学教训**：**「行数」不等于「有数据」**。NBS 对未发布的期会回
+「`dt_name` 有值、`v` 是空串」的占位行，第一版终验按 `len(raw)` 判通过，
+把 3 条映射判成 OK，其中 1 条（FDI）是真假通过。判据改成**非空值个数**后立刻分明。
+另外 **「某窗口全空」不等于「源不支持」** —— `GC.DOD.TOTL.GD.ZS` 就是换到 1960-2025
+才敢下的结论。详见 PROJECT_STATE §3.15。
+
+**证据物**（`data/raw/_probe_catalog/`，已被 gitignore）：`verified.json`（逐条取数结果）、
+`nbs_index.json`（78946 节点）、`nbs_targets.json`、`nbs_tree_{1,2,3}.json`、
+`wb_index.json`、`imf_index.json`、`bis_dataflows.json`、`bis_probe.json`、`fred_probe.json`、
+`diag_range.json`、`diag_wb.json`、`diag_nbs.json`。
