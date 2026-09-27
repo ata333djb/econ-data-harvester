@@ -8,12 +8,18 @@
 要 `cid` / `indicator_id` / `root_id` 三个 UUID，还得自己去目录树里翻。
 `edh` 把这一层收起来，让「我要 CPI」变成一条命令。
 
-本轮只做**目录**两件事（`list` / `info`），`fetch` 下一轮。
+本轮做完**目录 + 取数**两层：`list` / `info` / `summary` 是"能看清单"，
+`fetch` 是"能拿数据"。
 
     edh list                  列出所有指标
     edh list --source nbs     只列 NBS 能提供的
     edh info CPI              看 CPI 的详细信息（含各源取数参数）
     edh summary               目录总览（每个源覆盖多少指标）
+
+    edh fetch CPI --from 2020 --to 2024                 取数：CSV 到 stdout
+    edh fetch CPI --source nbs --from 2020 --to 2024    只取一个源
+    edh fetch CPI --from 2020 --to 2024 -o cpi.csv      写文件
+    edh fetch CPI --from 2020 --to 2024 --cross-check   附两两对比简报
 
 为什么先做目录而不是直接做 fetch
 --------------------------------
@@ -39,6 +45,8 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
 import sys
 import unicodedata
@@ -48,8 +56,9 @@ from typing import Any, Optional, Sequence
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "python"))
 
-from econ_core import catalog  # noqa: E402
+from econ_core import catalog, fetcher  # noqa: E402
 from econ_core.catalog import CatalogError  # noqa: E402
+from econ_core.fetcher import ROW_FIELDS  # noqa: E402
 
 #: 源的中文标签（只用于显示，机器可读的键仍是英文）
 SOURCE_LABELS: dict[str, str] = {
@@ -216,6 +225,187 @@ def cmd_summary(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# edh fetch
+# --------------------------------------------------------------------------- #
+
+def _fmt_num(v: Any) -> str:
+    """数值显示：None -> "—"，整数不带小数点，其余 6 位有效数字。"""
+    if v is None:
+        return "—"
+    if isinstance(v, float) and v.is_integer():
+        return f"{int(v)}"
+    if isinstance(v, float):
+        return f"{v:.6g}"
+    return str(v)
+
+
+def write_csv(rows: list[dict[str, Any]], stream: Any) -> None:
+    """按固定列序把行写成 CSV。
+
+    值用 `csv` 模块（stdlib）而不是手拼——单位字段里有中文括号和逗号，
+    手拼会在那些地方错列（`unit` 含逗号时尤其）。
+
+    `lineterminator="\\n"` 是**必须**的：`csv.writer` 默认写 `\\r\\n`，
+    而 Windows 上 `sys.stdout` 文本模式会把 `\\n` 再翻成 `\\r\\n`，
+    于是每行后面多出一个空行（第一版实测：130 行变成 260 行）。
+    """
+    writer = csv.writer(stream, lineterminator="\n")
+    writer.writerow(ROW_FIELDS)
+    for r in rows:
+        writer.writerow(["" if r.get(f) is None else r.get(f) for f in ROW_FIELDS])
+
+
+def _write_output(rows: list[dict[str, Any]], args: argparse.Namespace) -> Optional[str]:
+    """把结果写到 stdout 或 --output 指定的文件；返回写到的路径（stdout 时 None）。
+
+    文件用 **utf-8-sig**（带 BOM）：与项目既有的 `data/output/econ_data.csv` 一致，
+    这样在 Windows 上双击用 Excel 打开中文列不会乱码。stdout 不加 BOM ——
+    管道里的 `head`/`grep` 会把 BOM 当成数据的一部分。
+    """
+    if args.format == "json":
+        text = json.dumps(rows, ensure_ascii=False, indent=2)
+        if args.output:
+            Path(args.output).write_text(text + "\n", encoding="utf-8")
+            return args.output
+        print(text)
+        return None
+
+    if args.output:
+        p = Path(args.output)
+        if p.parent and not p.parent.exists():
+            p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("w", encoding="utf-8-sig", newline="") as fh:
+            write_csv(rows, fh)
+        return args.output
+    buf = io.StringIO()
+    write_csv(rows, buf)
+    sys.stdout.write(buf.getvalue())
+    return None
+
+
+def _briefing(rows: list[dict[str, Any]], args: argparse.Namespace,
+              pairs: Optional[list[dict[str, Any]]]) -> None:
+    """把「数据来自哪、能不能用」打到 stderr。
+
+    `--quiet` 时只留**一行**摘要：stdout 永远是纯 CSV，但脚本化调用不想看见
+    十几行装饰。默认（不 quiet）给完整简报 —— 这是本命令的"能不能用"那半。
+    """
+    notes = fetcher.last_notes()
+    ok = [n for n in notes if n["status"] == "ok"]
+    skipped = [n for n in notes if n["status"] != "ok"]
+
+    if args.quiet:
+        names = ",".join(n["source"] for n in ok)
+        extra = f"，跳过 {len(skipped)}" if skipped else ""
+        print(f"[edh] {args.name} {len(ok)} 源 {len(rows)} 行 ({names}){extra}",
+              file=sys.stderr)
+        return
+
+    names = ", ".join(n["source"] for n in ok)
+
+    def emit(line: str = "") -> None:
+        print(line, file=sys.stderr)
+
+    emit()
+    emit(f"→ 从 {len(ok)} 个源取数（{names}）")
+    w = max([_display_width(SOURCE_LABELS.get(n['source'], n['source'])) + 12
+             for n in notes] + [12])
+    for n in notes:
+        label = f"{SOURCE_LABELS.get(n['source'], n['source'])}（{n['source']}）"
+        if n["status"] == "ok":
+            emit(f"  {_pad(label, w)} {n['n_rows']:>5} 行")
+        else:
+            emit(f"  {_pad(label, w)}   ——  {n['status']}: {n['detail'][:58]}")
+    emit(f"  {'─' * (w + 6)}")
+    emit(f"  {_pad('合计', w)} {len(rows):>5} 行")
+
+    values = [r["value"] for r in rows if isinstance(r.get("value"), (int, float))]
+    n_missing = sum(1 for r in rows if r.get("value") is None)
+    emit()
+    emit("→ 简报：")
+    if values:
+        emit(f"  - 数值范围: {_fmt_num(min(values))} ~ {_fmt_num(max(values))}")
+    else:
+        emit("  - 数值范围: （无可用数值）")
+    emit(f"  - 空缺:     {n_missing} 行（该期源没有发布，不是取数失败）")
+    if rows:
+        kinds: dict[str, int] = {}
+        for r in rows:
+            kinds[r["period_type"]] = kinds.get(r["period_type"], 0) + 1
+        emit(f"  - 频率分布: " + "、".join(f"{k} {v} 行" for k, v in sorted(kinds.items())))
+        units = sorted({r["unit"] for r in rows if r.get("unit")})
+        if units:
+            emit(f"  - 单位（共 {len(units)} 种）: " + " | ".join(units))
+
+    if pairs is not None:
+        emit("  - 差异（--cross-check）:")
+        if not pairs:
+            emit("      只有 1 个源有数据，无法两两比对")
+        for p in pairs:
+            a, b = p["sources"]
+            rate = p.get("max_diff_rate")
+            rate_s = f"{rate * 100:.3g}%" if isinstance(rate, (int, float)) else "—"
+            absdiff = p.get("max_abs_diff")
+            abs_s = _fmt_num(absdiff)
+            tag = "" if p.get("annualized_for_comparison") else ""
+            if p["comparable"]:
+                emit(f"      {a} vs {b}: 重叠 {p['n_common']} 期，"
+                     f"最大绝对差 {abs_s}（相对 {rate_s}） -> {p['verdict']}{tag}")
+            else:
+                emit(f"      {a} vs {b}: {p['verdict']}"
+                     + (f"（重叠 {p['n_common']} 期）" if p["n_common"] else "")
+                     + (f"，最大绝对差 {abs_s} 仅供参考" if absdiff is not None else ""))
+                if p.get("reason"):
+                    emit(f"          {p['reason']}")
+            if p.get("annualized_for_comparison"):
+                emit("          （两侧原生频率不同，已按年均值对齐后再比）")
+
+
+def cmd_fetch(args: argparse.Namespace) -> int:
+    """`edh fetch NAME`：取数 -> CSV(stdout) + 简报(stderr)。"""
+    try:
+        indicator = catalog.get_indicator(args.name)["name"]
+    except CatalogError as exc:
+        print(f"错误: {exc}", file=sys.stderr)
+        return 2
+
+    kwargs: dict[str, Any] = {
+        "region": args.region,
+        "from_year": args.from_year,
+        "to_year": args.to_year,
+        "frequency": args.frequency,
+        "allow_forecast": args.allow_forecast,
+    }
+    try:
+        if args.source:
+            rows = fetcher.fetch_indicator(indicator, source=args.source, **kwargs)
+            grouped = {args.source: rows}
+        else:
+            grouped = fetcher.fetch_all_sources(indicator, **kwargs)
+            rows = [r for src in catalog.SOURCES for r in grouped.get(src, [])]
+    except (KeyError, fetcher.FetcherError) as exc:
+        print(f"错误: {exc}", file=sys.stderr)
+        return 2
+
+    rows.sort(key=lambda r: (r["source"], r["period"]))
+    if not rows:
+        print(f"错误: {indicator} 在给定条件下没有取到任何行"
+              f"（检查 --source / --from / --to / --frequency）", file=sys.stderr)
+        for n in fetcher.last_notes():
+            if n["status"] != "ok":
+                print(f"      {n['source']}: {n['detail']}", file=sys.stderr)
+        return 2
+
+    pairs = fetcher.cross_check(grouped) if args.cross_check else None
+
+    written = _write_output(rows, args)
+    if written:
+        print(f"\n→ 写入 {written}", file=sys.stderr)
+    _briefing(rows, args, pairs)
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # main
 # --------------------------------------------------------------------------- #
 
@@ -240,6 +430,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_summ = sub.add_parser("summary", help="目录总览")
     p_summ.add_argument("--json", action="store_true", help="输出 JSON")
     p_summ.set_defaults(func=cmd_summary)
+
+    p_fetch = sub.add_parser(
+        "fetch", help="取数：CSV 到 stdout，简报到 stderr",
+        epilog="不指定 --source 时**取所有可用源**并合并成一张长表；"
+               "不给 --from/--to 时取最近 10 年。")
+    p_fetch.add_argument("name", help="指标名（规范名 / 别名 / 中文）")
+    p_fetch.add_argument("--region", default="CHN", help="地区代码，默认 CHN")
+    p_fetch.add_argument("--source", default=None,
+                         help=f"只取一个源（{', '.join(catalog.SOURCES)}）")
+    p_fetch.add_argument("--from", dest="from_year", type=int, default=None,
+                         help="起始年（含），如 2020")
+    p_fetch.add_argument("--to", dest="to_year", type=int, default=None,
+                         help="结束年（含），如 2024")
+    p_fetch.add_argument("--frequency", default=None, choices=["annual", "monthly"],
+                         help="annual=月度行按年均值年化；monthly=只保留原生月度源")
+    p_fetch.add_argument("--output", "-o", default=None, help="写文件（默认写 stdout）")
+    p_fetch.add_argument("--format", default="csv", choices=["csv", "json"],
+                         help="输出格式，默认 csv")
+    p_fetch.add_argument("--cross-check", action="store_true",
+                         help="对同一指标的所有源做两两对比（写进简报）")
+    p_fetch.add_argument("--quiet", action="store_true",
+                         help="简报只留一行摘要")
+    p_fetch.add_argument("--allow-forecast", action="store_true",
+                         help="保留 IMF 的预测年份（默认截到今年）")
+    p_fetch.set_defaults(func=cmd_fetch)
     return parser
 
 

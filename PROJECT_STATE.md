@@ -3,12 +3,14 @@
 - 生成时间：2026-09-27
 - 面向对象：**新对话的 Agent**。读完之后应当能直接继续工作，不需要回看任何历史对话。
 - 维护规则：每完成一轮实质改动就更新本文件。**只写状态**，不写历史对话，不粘贴代码，只给路径与一句话职责。
-- **篇幅上限：≤700 行**（2026-09-27 三调：原 500 -> 550 -> 600 -> 700。每次都因为新增了一整个方向）。
+- **篇幅上限：≤720 行**（2026-09-27 四调：原 500 -> 550 -> 600 -> 700 -> 720）。
   **每次放宽都必须在这里写清"多出来的是哪个方向的哪一节"**，否则上限会一路变成没有上限：
-  本次 600 -> 700 是方向 E（指标目录）带来的 §1.4 / §2.13 / §3.15-3.17 / §5.3① / §6 / §7 六处，
-  净增约 90 行。
-  本文件内容是坑 + 约定 + 教训，**删任何一条都会增加后人重踩的风险**，所以宁可放宽上限也不删条目。
-  设立上限的目的是「新 Agent 能一次读完」（700 行中文约 10000-13000 token），**不是为了压而压**。
+  - 600 -> 700：方向 E 第一轮（指标目录），新增 §1.4 / §2.13 / §3.15-3.17 / §5.3① / §6 / §7 六处
+  - 700 -> 720：方向 E 第二轮（`edh fetch`），新增 §2.14 + §3.18，并把 §1.4/§1.5 换成新一轮。
+    **本轮先做过一轮压缩**（725 -> 711，压的是 §1.4/§2.14/§3.15-3.18 里与模块 docstring
+    重复的部分），压不动了才放宽 20 行 —— 顺序是先压后放，不是直接放。
+  本文件内容是坑 + 约定 + 教训，**删任何一条都会增加后人重踩的风险**，所以宁可放宽也不删条目。
+  设立上限的目的是「新 Agent 能一次读完」（720 行中文约 10000-13000 token），**不是为了压而压**。
 
 权威性顺序（冲突时以序号小的为准）：
 
@@ -49,8 +51,11 @@
 
 - `catalog_data.yaml` + `catalog.py` —— 指标目录：18 个主流宏观指标 / **51 条源映射**，
   把「GDP 增速」这类说法映射到各源真正要的参数（NBS 的三个 UUID 对用户彻底隐藏）
-- `tools/edh.py` —— 用户 CLI：`edh list` / `list --source nbs` / `info CPI` / `summary`。
-  **本轮只做目录，`fetch` 下一轮**
+- `fetcher.py` —— **取数适配层**：catalog 配置 -> 五个 client -> **统一 9 字段行**
+  （`fetch_indicator` / `fetch_all_sources` / `cross_check`，§2.14）。五家 client 的调用方式、
+  时间标签、数值字段、频率语义全不一样，差异全在这一层吃掉
+- `tools/edh.py` —— 用户 CLI：目录侧 `list` / `list --source nbs` / `info CPI` / `summary`；
+  取数侧 `fetch CPI --from 2020 --to 2024`（CSV 到 stdout、简报到 stderr、`--cross-check`）
 - 清单是**人工编纂 + 机器验证**：每条映射都由 `python/_probes/probe_catalog_sources.py`
   真跑过取数（§2.13、§3.15）
 
@@ -62,7 +67,7 @@
 **文档**：`python/econ_core/README.md`（生产层已知上游事实）· `python/_probes/README.md`
 （探测脚本索引 + 四源独立性判定，§3.10）
 
-### 1.2 门禁：26 项（tools/run-all-checks.py，当前 26/26 PASS）
+### 1.2 门禁：28 项（tools/run-all-checks.py，当前 28/28 PASS）
 
 | # | 检查 | 说明（类型都是 node / python） |
 |---|---|---|
@@ -84,17 +89,22 @@
 | 24 | splice-cpi | 真实拼接：BIS 年化 ⊗ NBS 年度 CPI（读 validated + 拉一次 BIS）；timeout 420s |
 | 25 | catalog --test | 指标目录自检：18 指标 / 51 源映射、别名唯一、必需键齐全（纯离线） |
 | 26 | edh list | 用户 CLI 第一条命令：argparse + CJK 对齐 + 渲染 + 退出码（纯离线） |
+| 27 | fetcher --test | 取数适配层自检：五源统一形状 / 年化手算复核 / 交叉验证 / KeyError 路径（**联网**，timeout 420s） |
+| 28 | edh fetch smoke | 用户真敲的那条命令：四源合并 + CSV 到 stdout + 简报到 stderr（**联网**，timeout 420s） |
 
 顺序**有依赖**：18 -> 19 -> 20 -> 21 -> 22 -> 23 -> 24。credibility 读 validated + processed +
 cross_check 三样产物（不能挪到 arbiter 旁）；**splice-cpi 读 materialize-validated 产出的 NBS CPI 文件，
-必须排在它之后**。网络密集型检查 timeout 放宽到 420s。25/26 是纯离线，排在最后，
-**25 在 26 之前**：结构坏了先报结构错，别先报渲染错。
+必须排在它之后**。网络密集型检查 timeout 放宽到 420s。25/26 是纯离线，27/28 是**联网**的，
+且 25 -> 26 -> 27 -> 28 的次序有理由：先确认目录本身没坏，再验"按目录取数"这条路 ——
+**目录对不等于取数对**（NBS 三个 UUID、WB 的 date_range、IMF 的预测值都在适配层）。
 
-**三处是主动加的**（当时任务只要 23/23）：① 第 24 项 `splice-cpi` —— `splicer --test` 只证明
+**五处是主动加的**（当时任务只要 23/23）：① 第 24 项 `splice-cpi` —— `splicer --test` 只证明
 **合成**数据能拼，而「真实链路上真的接上了」只有跑真实脚本才算验过；② check-cli-envelope 里的
 2 条 BIS 用例 —— 新源不进契约测试等于信封契约零覆盖（**只加条目，未改任何已有条目**）；
 ③ 第 25/26 项 —— 指标目录是**人工维护的 YAML**，没有断言就没有防漏网，
-而 `edh list` 覆盖的是 `catalog --test` 摸不到的 argparse / 渲染 / 退出码。
+而 `edh list` 覆盖的是 `catalog --test` 摸不到的 argparse / 渲染 / 退出码；
+④ 第 27/28 项 —— 同一课再往下一层：`fetcher` 是"目录配置 -> client 调用"的适配层，
+`edh fetch` 又覆盖 CLI 与 CSV 渲染。
 顺带记录：**FRED 不在 check-cli-envelope 覆盖里**（历史遗留，未动）。
 
 ### 1.3 当前数据规模
@@ -130,35 +140,37 @@ cross_check 三样产物（不能挪到 arbiter 旁）；**splice-cpi 读 materi
     6. nbs|surveyed_unemployment（起点 2018）      12. bis|WS_LONG_CPI|M.CN.628（指数 2010=100，380 期）
     别名：NBS|000000000000|db8e5a86c08246e79b1b11251927e740 -> 指向第 1 条（不计入 12 条）
 
-### 1.4 最近一轮新增（方向 E 第一轮：指标目录 —— 从开发者工具到用户产品）
+### 1.4 最近一轮新增（方向 E 第二轮：`edh fetch` —— 从"能看清单"到"能拿数据"）
 
-**目标**：用户输入一个指标名，得到一份数据。此前要写 Python 还得自己翻目录树找三个 UUID。
-
-- **`python/econ_core/catalog_data.yaml`** —— 18 个指标 / **51 条源映射**，人工编纂。
-  每条含 `display_name` / `description` / `aliases` / `frequency` / `sources`
-- **`python/econ_core/catalog.py`** —— `list_indicators()` / `get_indicator(name)` /
-  `get_source_config(indicator, source)` + `--test`（纯离线，11 组断言）
-- **`tools/edh.py`** —— `edh list` / `list --source nbs` / `info CPI` / `summary`；
-  中文列按**东亚字符宽度**对齐（`len()` 算宽度会让中文列全串位）
-- **`python/_probes/probe_catalog_sources.py`** —— 取证脚本，8 个阶段（nbs / wb / imf / bis /
-  fred / targets / verify / diag_*）。**本轮所有结论都由它真跑产生**，证据在
-  `data/raw/_probe_catalog/`
-- **门禁 24 -> 26**：新增 `catalog --test` 与 `edh list`（只加条目，未改已有条目）
-- **本轮踩到并修掉的 3 个真问题**（详见 §3.15）：
-  ① 终验第一版**只数行数不数非空值** -> NBS 占位行被当成"有数据"（假通过）；
-  ② `display_name` 不在别名索引里 -> 中文名 `居民消费价格指数` 查不到（自检抓出）；
-  ③ 三处"某源没有这个指标"的结论，**分两个窗口才敢下**（2015-2024 全空不等于源不支持）
-- **三处结论是"探过、确认不可用"而不是"没探"**，已留痕未收录：`imf|BX_GDP`、`imf|BM_GDP`
-  （对 CHN 各 0 行）、`worldbank|GC.DOD.TOTL.GD.ZS`（1960-2025 共 66 行全 null）。
-  连带结论：**`GOVERNMENT_DEBT` 只有 IMF 一个源** -> 单源即无法在项目内交叉验证（§5.3）
+- **`python/econ_core/fetcher.py`** —— 取数适配层，把五家 client 的差异全吃掉：
+  `fetch_indicator()` / `fetch_all_sources()` / `cross_check()` / `annualize_rows()`，
+  `last_notes()` 报**每个源这一轮怎么了**（沿用五个 client 的 `last_meta()` 惯例）
+- **`tools/edh.py fetch`** —— `--region / --source / --from / --to / --frequency /
+  --output(-o) / --format csv|json / --cross-check / --quiet / --allow-forecast`。
+  **CSV 到 stdout、简报到 stderr**（stdout 永远可以直接 `> x.csv` 或进管道）
+- **门禁 26 -> 28**：`fetcher --test`（联网，约 15 次请求）+ `edh fetch smoke`（真敲的那条命令）
+- **本轮修掉 3 个由自检/实测抓出的 bug**（全在输出/簿记层，断言不会变红的那种）：
+  `last_notes()` 被后一个源清空；`csv.writer` 行尾 + Windows stdout 翻译导致**每行多一个空行**；
+  `unit` 字符串直接比会**误报"口径不同"**。逐条见 §3.18
+- **交叉验证的立场（重要）**：`--cross-check` **不替用户做单位换算**。
+  两侧 unit 不同时判 `口径不同`，并把**绝对差**标成"仅供参考"。CPI 四源实测 6 对里
+  只有 **World Bank vs BIS 可比**（同为 2010=100，相对差 0.337% -> 可直接拼接），
+  其余 5 对因基期/口径不同被判不可比。这是**结论不是缺陷**：NBS 是「上年=100」、
+  FRED 是「2015=100」、BIS 重定基 2010=100，硬算出来的差异率没有意义（§3.10/§5.4）
 
 ### 1.5 更早几轮（压缩存档）
+
+- **方向 E 第一轮（指标目录）**：`catalog_data.yaml`（18 指标 / 51 源映射）+ `catalog.py`
+  （`list_indicators` / `get_indicator` / `get_source_config` + `--test`）+ `tools/edh.py`
+  （`list` / `info` / `summary`）+ `_probes/probe_catalog_sources.py`（8 阶段取证脚本）；
+  门禁 24 -> 26。51 条映射**逐条真跑过取数**，另有 3 条"探过、确认对中国取不到数据"留痕未收录。
+  当轮踩的坑见 §3.15-3.17
 
 - **方向 C 第五轮（rebase）**：`splicer.rebase()` 的 `ratio`/`difference` 两模式 + `splice(rebase=...)`；
   自检 46 -> 58 项。**关键结论：rebase 只调水平不调斜率，对当前 CPI 用例无效** ——
   触发「需桥接」的是 `trend_break`（magnitude 1.3590）不是 `level_jump`（excess_ratio 0.3378 本判 ok）；
   且 NBS 完全落在 BIS 跨度内 -> `applied=False`（`not_applied_reason: no_non_overlap`），
-  所以三模式 verdict 相同**不构成**"rebase 无效"的证据。当轮修掉 5 个 bug（§5.4 留了两条）
+  故三模式 verdict 相同**不构成**"rebase 无效"的证据。当轮修掉 5 个 bug（§5.4 留两条）
 
 - **方向 C 第四轮**：修 `http_client` 大小写缺陷（§3.13 闭环，顺带修掉一处 `KeyError`）；
   BIS 两条接进声明式清单打通 validated -> processed -> 导出（152 -> **900 行**）；
@@ -286,6 +298,27 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
   **`variants` 里的每条也要带齐该源的必需键**
 - `name`（规范名，如 `GDP_PER_CAPITA`）与 `display_name`（中文）**分工固定**：
   规范名是键与排序依据，中文名是给人看的、且必须可检索
+
+### 2.14 取数适配层（`fetcher.py`）的规矩
+
+- **统一行 9 个字段，顺序固定**：`indicator / source / region / period / period_type /
+  value / unit / frequency / series_name`。它同时是 `edh fetch` 的 CSV 列序 ——
+  `ROW_FIELDS` 是唯一真源，改一处就要改另一处
+- **五源的差异只在适配层出现**，别往 client 里加统一化逻辑：nbs 要 `dts` 且**必须显式给全**、
+  wb 要 `date=lo:hi`、imf/bis **给不了范围**（取回后本地裁）、fred 有 `start/end`。
+  时间标签用 `dt` 的 `YY`/`MM` 后缀**结构化还原**，不去解析中文 `dt_name`
+- **默认窗口 = 最近 10 年**。不给默认值的话，"不限"在五个源上含义不同，合并成一张表的
+  跨度会差几十年（NBS 不给 `dts` 就等于没取）
+- **月度年化 = 年均值** + `aggregated_from_months`（月数）；**年度的绝不反向拆成月度**（§2.5）
+- **IMF 默认截到今年**（它含预测值，实测排到 2031）；要看预测得显式 `--allow-forecast`
+- **NBS 占位行照收**（`v` 空串 -> `value=None`）：用户要看见"官方这期没发布"，
+  而不是一张比真实年份少的表。简报的「空缺」行数就是它
+- **`fred` / `bis` 序列国别写死在 ID 里**，故 `region != CHN` 时**直接报错**，
+  而不是返回中国的数却标成别国
+- **`--cross-check` 不替用户做单位换算**：`unit_match=False` 时判「口径不同」并把绝对差
+  标成"仅供参考"，绝不硬报一个"冲突"（`_unit_key()` 的规矩见 §3.18 第三条）
+- **stdout 是数据、stderr 是人话**（同 §2.2）：CSV 走 stdout，简报走 stderr，
+  所以 `edh fetch CPI > cpi.csv` 永远得到干净的 CSV
 
 ---
 
@@ -457,13 +490,10 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
   - **`fdi`（NBS）**：2015/2018 全年 12 期都有值，**2021/2024 全空** -> 真停更。
     精确到日：实测 2014-01..**2019-11** 共 71 个非空期，末值 124394，2020-01 起全占位
     （证据 `diag_range.json`）。已按"有数据但停更"收录并在 YAML 写明 `data_until: 2019-11`
-- **"某个窗口全空"不等于"这个源不支持"**，必须换窗口再确认一次，否则会把
-  "数据在窗口外"误判成"源没有这个指标"。实测三个例子：
-  - `worldbank|GC.DOD.TOTL.GD.ZS`（中央政府债务）—— 换到 **1960-2025** 共 66 行**仍全为 null**，
-    这才敢下"WB 对中国没有这个指标"的结论
-  - `imf|BX_GDP` / `imf|BM_GDP` —— 对 CHN 直接 **0 行**，同样确认不可用
-  - 这三条**留痕不删除**（probe 脚本里标 `expect_unavailable`，进 `verified.json`），
-    后人不必重探
+- **"某个窗口全空"不等于"这个源不支持"**，必须换窗口再确认一次。实测三例：
+  `worldbank|GC.DOD.TOTL.GD.ZS` 换到 **1960-2025** 共 66 行**仍全 null**，
+  `imf|BX_GDP` / `imf|BM_GDP` 对 CHN 直接 **0 行** —— 这才敢下"源不支持"的结论。
+  三条**留痕不删除**（probe 脚本标 `expect_unavailable`，进 `verified.json`），后人不必重探
 - 同源坑：`世界银行 /v2` 对没有数据的年份回 `value: null` 的**行**（不是不返回行），
   所以 WB 侧同样只能数非空值
 
@@ -483,6 +513,24 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
 正则结尾一律用 `\s*$`。同源：`get_catalog_tree(cid)` 的节点字段是
 `publicrelease_web_dacatalog_id`，把它当 `dt` 传进去反而取不到数（实测 0 行），
 **只有 `dt=""` 是对的**，别自作聪明去填数据表 id。
+
+### 3.18 ⚠️ 三个"看着对、其实错"的输出层坑（方向 E 第二轮实测）
+
+都发生在**输出/簿记**层，不是取数逻辑错 —— 所以不会让任何断言变红，只会让用户看到错的东西。
+三个都是自检/实测抓出来的（细节见 `fetcher.py` / `tools/edh.py` 的同名 docstring）：
+
+- **模块级"最近一次状态"被循环里的下一次调用清空**：`fetch_indicator` 开头 `_NOTES.clear()`，
+  于是 `fetch_all_sources` 每取一个源就抹掉前一个源的记录（4 个源显示 1 个）。
+  **清空要放在公开入口**，内部函数只追加 + 另给 `reset_notes()`。同源坑：任何
+  `last_meta()` 风格的模块级状态都要问"谁负责清、什么时候清"
+- **`csv.writer` 默认行尾 + Windows stdout 翻译 = 每行多一个空行**：
+  默认 `lineterminator="\r\n"`，Windows 的 `sys.stdout` 再把 `\n` 翻成 `\r\n`
+  -> `\r\r\n`，实测 130 行变 260 行。修法 `lineterminator="\n"`。
+  **验收要看行数，不是看"有没有输出"**
+- **用字符串相等判"单位是否可比"会误报**：unit 是人工写的自由文本，同口径因频率不同
+  写法不同（WB `指数（2010=100）` vs BIS `指数（2010=100，月度）`），`==` 会把
+  **本来可比**的一对判成"口径不同"。但也不能粗暴归一化 —— `指数（上年=100）` 与
+  `指数（2010=100）` **必须**保持不同。`_unit_key()` 只剥频率词，**基期数字原样保留**
 
 ## 4. 架构图
 
@@ -549,20 +597,23 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
 
 ### 5.3 待办（按优先级）
 
-- **① 方向 E 第二轮：`edh fetch`（高，本轮的直接续作）** —— 目录已经就位（18 指标 / 51 映射），
-  下一步是把 `get_source_config()` 的参数真正喂给五个 client，落成 validated 长表。
-  要定的几件事：**NBS 三元组怎么进 normalize**（现有 `normalize_observations` 要
-  `cid/indicator_id/root_id` 那套 request 指纹）、**多源同名指标怎么命名 series_key**
-  （目录的 `GDP` vs 知识库的 `nbs|gdp|cny_100m`）、**默认窗口**（目录现在不记窗口）、
-  以及 `variants` 怎么选（默认取主映射还是全部取）
-- **② 拼接产物进 processed / 导出（中）** —— 现在只到 `data/validated/spliced/`。要进导出链路，
+- **① 方向 E 第三轮：`edh export` / 落盘（高，本轮的直接续作）** —— 现在 `edh fetch`
+  只把数据**打给用户**（stdout / `--output`），**不落任何一层** data/。两条路：
+  ① 让产物进 `data/validated/`（要解决**命名冲突**：目录的 `CPI` vs 知识库的
+  `nbs|cpi|全国居民消费价格指数（上年=100） (%)` 是两套键，得定映射规则，否则
+  `source_profiler` 会因查不到 key 抛 KeyError）；
+  ② 保持轻量，只加 `--format parquet` / 多指标批量取数（`edh fetch GDP CPI M2`）。
+  **倾向前者** —— 它才把"用户产品"和既有的验证/画像/报告链路接上
+- **② 多指标批量取数（中）** —— 目录能查 18 个指标，但 `edh fetch` 一次只取一个。
+  批量要先定"多指标的 CSV 怎么合"（`indicator` 列已在，主要是窗口/频率取交集的问题）
+- **③ 拼接产物进 processed / 导出（中）** —— 现在只到 `data/validated/spliced/`。要进导出链路，
   得先让 `fill_strategy` 认识拼接产物（它现在只认 `rows` 长表）
-- **③ `RELATIVE_METRIC_FLOOR` 按量纲配置（低）** —— 见 §5.4，0.5 只适配百分点量纲
-- **④ ICP 2021 单独立项** —— CPI 维度已证不可达（§3.10），但**价格水平**维度的独立测量存在：
+- **④ `RELATIVE_METRIC_FLOOR` 按量纲配置（低）** —— 见 §5.4，0.5 只适配百分点量纲
+- **⑤ ICP 2021 单独立项** —— CPI 维度已证不可达（§3.10），但**价格水平**维度的独立测量存在：
   世界银行 ICP 是各经济体**自己采集**一篮子代表品，2021 轮中国**参加了**（NBS 2024-05 自行发布过结果）。
   可用它验 PWT 的 `pl_gdpo` 或 OECD `DF_TABLE4` 的中国 PPP —— 一方官方采集、一方多边化处理，
   这才是真交叉验证。**立项前需先解 §3.11 的 TLS 证书链**（PWT 侧）
-- **⑤ `GOVERNMENT_DEBT` 只有单源，无法交叉验证（低）** —— 目录实测 NBS 无此指标、
+- **⑥ `GOVERNMENT_DEBT` 只有单源，无法交叉验证（低）** —— 目录实测 NBS 无此指标、
   World Bank 对中国全 null，只剩 IMF `GGXWDG_NGDP`。要做交叉验证得引新源（BIS 债务证券？
   财政部？），本轮范围外，先记着
 - **方向 C 已完成五轮**（全部结项）：① FRED CPI ② 加独立源 -> 探测判定**不可达，勿重开**
@@ -602,8 +653,8 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
   **两个 YAML 是人工编纂的知识文件，不是生成物**：`source_profiles.yaml`（来源画像，§2.8）与
   `catalog_data.yaml`（指标目录，§2.13）。改它们不改代码，但都要跑各自的自检。
 - **`tools/`** —— 门禁与加工层：
-  `run-all-checks.py`（门禁总入口，26 项，失败即停，支持逐检查 timeout 覆盖）·
-  `edh.py`（**用户 CLI**：list / info / summary，纯离线）·
+  `run-all-checks.py`（门禁总入口，28 项，失败即停，支持逐检查 timeout 覆盖）·
+  `edh.py`（**用户 CLI**：`list` / `info` / `summary` 纯离线，`fetch` **联网** —— §2.14）·
   `check-cli-envelope.py`（契约测试，真跑 12 子命令 / 13 用例，R1-R11，420s）·
   `smoke-{nbs,worldbank,imf,fred,bis}-adapter.mjs`（五个插件的 argv 桩测）·
   `verify-preset.mjs`（preset 装配校验，**不在门禁里，手工跑**）·
@@ -638,20 +689,20 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
 
 1. 读本文件 —— 建立全局认识
 2. `git log --oneline -20` —— 判断哪些改动已固化、哪些还挂在 working tree
-3. 跑门禁确认基线（期望 **26/26 PASS，exit 0**；若不足，先定位退化的那一项，不要叠加改动）：
+3. 跑门禁确认基线（期望 **28/28 PASS，exit 0**；若不足，先定位退化的那一项，不要叠加改动）：
 
        cd D:\universe\econ-data-harvester
        .\.venv\Scripts\python.exe tools\run-all-checks.py
 
 4. 报告状态（照抄此模板）：
 
-       门禁：26/26 PASS（exit 0）
+       门禁：28/28 PASS（exit 0）
        working tree：<git status --short 的内容>
        数据：12 条声明式序列 / 900 行 / 10 缺失行（按行：series_start 5, discontinued 3, not_yet_published 2, true_gap 0）
        目录：18 个指标 / 51 条源映射（3 条探过并确认不可用，未收录）
 
 **改动后的固定动作**：① 开工前自检（pwsh ACL 故障见 §3.7；yaml/Jinja2 见 §3.6；validated 为空先跑
-materialize-validated）；② 跑完整门禁确认仍 26/26（新增检查要同步加进 `CHECKS` 与 docstring 编号）；
+materialize-validated）；② 跑完整门禁确认仍 28/28（新增检查要同步加进 `CHECKS` 与 docstring 编号）；
 ③ 新增序列必须补 `source_profiles.yaml` 条目（否则 profiler 抛 KeyError）；
 **③b 动 `catalog_data.yaml` 必须跑 `probe_catalog_sources.py verify` 复核**（§2.13）；
 ④ 改契约/分类/字段名要同步更新本文件第 2、3 节；⑤ **不要把 data/ 下的产物提交进 git**，

@@ -43,6 +43,8 @@
 24. python tools/splice-cpi.py                         （首次真实拼接：BIS 年化 ⊗ NBS 年度 CPI）
 25. python -m econ_core.catalog --test                 （指标目录自检，纯离线）
 26. python tools/edh.py list                           （用户 CLI：列出指标，纯离线）
+27. python -m econ_core.fetcher --test                 （取数适配层自检，**联网**）
+28. python tools/edh.py fetch CPI --from 2020 --to 2024 --quiet  （用户 CLI：取数，**联网**）
 
 约定
 ----
@@ -171,6 +173,17 @@ CHECKS: list[Check] = [
     # argparse 装配、CJK 宽度对齐、stdout 渲染、退出码 —— 这些是"用户真的跑得起来"的部分，
     # 单元自检覆盖不到。放在 catalog --test 之后：结构坏了先报结构错，别先报渲染错。
     Check("edh list", "python", ["tools/edh.py", "list"]),
+    # fetcher --test 是**联网**的：真跑五源取数（CPI 四个源约 15 次请求）+ 年化手算复核
+    # + 交叉验证 + KeyError 路径。它守的是"catalog 配置 -> client 调用"这层适配，
+    # 而 catalog --test 只守目录本身的结构。耗时与 compare-* 同量级，故 420s。
+    Check("fetcher --test", "python", ["-m", "econ_core.fetcher", "--test"],
+          timeout_s=420),
+    # edh fetch smoke 走**用户真正会敲的那条命令**（四源合并 + CSV 到 stdout + 简报 stderr），
+    # 覆盖 fetcher --test 摸不到的部分：CLI 参数装配、CSV 渲染与退出码。
+    # `--quiet` 让 stderr 只留一行，失败时门禁打印的 stdout（130 行 CSV）也更好读。
+    Check("edh fetch smoke", "python",
+          ["tools/edh.py", "fetch", "CPI", "--from", "2020", "--to", "2024", "--quiet"],
+          timeout_s=420),
 ]
 
 # --------------------------------------------------------------------------- #
