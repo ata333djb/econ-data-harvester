@@ -39,6 +39,8 @@
 - src/plugins/worldbank-adapter.js —— 注册 wb_fetch_indicator / wb_list_indicators / wb_list_countries 三个工具
 - src/plugins/imf-adapter.js —— 注册 imf_fetch_indicator / imf_list_indicators / imf_list_countries 三个工具
 - src/plugins/fred-adapter.js —— 注册 fred_fetch_series / fred_list_search 两个工具
+- tools/compare-cpi.py —— CPI 交叉验证：NBS「上年=100」vs FRED/OECD（先年均值再转同比；**本轮新增**）
+- tools/smoke-fred-adapter.mjs —— FRED 插件 argv 拼装冒烟（桩替换 execFile，含 start/end 可选参数）
 - src/plugins/hello.js —— 最小宿主插件，只用来证明 preset 装配链路可激活（不参与业务）
 
 **验证与分析层**
@@ -133,6 +135,7 @@
 - **PYTHONIOENCODING**：utf-8（否则 Windows 控制台会乱码）
 - **为什么必须用 venv**：本机 Schannel 凭证库不可用，非 OpenSSL 栈会 TLS 失败；http_client.assert_venv() 会强制拦截
 - Node 侧脚本用系统 node（tools/*.mjs 通过 shutil.which("node") 或直接 node 命令）
+- **境外源一律先试朴素 UA**：IMF（Akamai）与 FRED 都会拒 Chrome UA，只有 `python-urllib/3.12` 能通；已固化在 imf_client.IMF_HEADERS 与 fred_client.FRED_HEADERS
 
 ### 2.2 CLI 契约（三个 *_client_cli.py 共同遵守）
 
@@ -206,6 +209,11 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 跨源比数值前必须先把单位对齐并**把推理过程打印出来**，不允许隐式换算。已确立的换算：NBS 亿元 <-> WB 元（x1e8）、IMF 十亿美元 -> 亿美元（x10）、汇率取自 World Bank PA.NUS.FCRF。
 
+### 2.11 cross_check 产物契约（arbiter 数据驱动的前提）
+
+- **每个对比产物必须自带 `series_a` / `series_b` / `measured`**（多对用 `pairs` 数组）；`measured` 里给 `diff_pp` + `diff_type`（"pp" 或 "percent"）+ `source`。缺字段的产物 arbiter 只记 warning 跳过
+- **arbiter 不猜序列对**：形状由产物自己声明（见 5.4 的错配事故）
+
 ---
 
 ## 3. 已知的坑（不要再踩）
@@ -224,8 +232,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 - 已固化在 imf_client.IMF_HEADERS。**不要顺手改回 Chrome**
 - 同源坑：/v1/{indicator}/{country} 的 country 路径段**不做服务端过滤**（实测 /NGDPD/CHN 仍返回 229 个国家），过滤必须在客户端做
 
-**第二个实例（FRED，本轮踩到）**：fredgraph.csv 对默认 Chrome UA 直接 `RemoteDisconnected`（重试 3 次全失败），空 UA 也不行，只有 `python-urllib/3.12` 能拿到 200。已固化在 fred_client.FRED_HEADERS。
-两个源都是「伪装浏览器反而被拒」，所以：**接新的境外源时先试朴素 UA，别急着加浏览器头**。
+**第二个实例（FRED，本轮踩到）**：fredgraph.csv 对默认 Chrome UA 直接 `RemoteDisconnected`（重试 3 次全失败），空 UA 也不行，只有 `python-urllib/3.12` 能拿到 200。已固化在 fred_client.FRED_HEADERS；两个源都是「伪装浏览器反而被拒」——**接新的境外源时先试朴素 UA，别急着加浏览器头**。
 
 ### 3.3 NBS 的 i_name 有时是 null
 
@@ -263,6 +270,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 - 处置约定：**先试普通模式；失败即带 sandbox_permissions=danger-full-access + justification 重试一次**。一次提权被拒即为终局，不要绕路
 - 涉及 Temp 目录：C:\Users\user\AppData\Local\Temp\dsh-*（每个命令一个随机目录，所以重建单个目录没用）
 - 读文件类工具（read/edit/write）**不受影响**，只有 pwsh 子进程受影响
+- **写 workspace 之外的文件（家目录 preset 等）要 danger-full-access 审批**：审批无人应答时调用会**挂到墙钟上限（实测约 10 分钟）**才失败，而且**不会部分生效**（实测三处编辑全部未写入）。这类改动手工用 PowerShell 补，别指望提权
 
 ### 3.8 其他容易踩的（按层归类）
 
@@ -376,13 +384,11 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 ### 5.2 方向 A 第三轮：可信度评分 —— 已完成
 
-- 产出：python/econ_core/credibility.py + 报告落盘 data/validated/credibility/（12 条 + _index.json）
-- 五维加权：Expertise 0.25 / Provenance 0.20 / Timeliness 0.10 / Transparency 0.15 / Coherence 0.30 -> 0-100 分 + high/medium/low。当前 **12 条**：9 high / 3 medium；最高 nbs|surveyed_unemployment 95.5，最低 imf|NGDP_RPCH 77.25；两条只对比不落盘的序列 provenance 只有 30（没有 series_file）
+- 产出：python/econ_core/credibility.py + 报告落盘 data/validated/credibility/（**12 条** + _index.json）；五维加权（Expertise .25 / Provenance .20 / Timeliness .10 / Transparency .15 / Coherence .30）-> 0-100 分 + high/medium/low。当前 9 high / 3 medium；最高 nbs|surveyed_unemployment 95.5，最低 imf|NGDP_RPCH 77.25；两条只对比不落盘的序列 provenance 只有 30（没有 series_file）
 
 ### 5.3 方向 D 与之后的待办
 
-- **方向 D 已完成四轮**：① HTML 质量报告 ② 数据血缘 + 真实门禁状态 ③ 修 export 的 alias 重复 ④ 图表内联（报告自包含，断网可看）。后续可选：导出 PDF / 挂 CI（CI 用 `report.py --test --offline` 可复现，但要**先预热缓存**——冷检出没有 raw 存档，首次仍得联网拉一次 Plotly；门禁本身仍用不带 --offline 的 `report.py --test`）
-- **方向 A 第四轮（可选）**：拼接断点检查 / PROV-JSON 溯源导出 —— 还没开始；注意系统至今**从未真正拼接**过序列，断点检查暂时没有对象
+- **方向 D 已完成四轮**：① HTML 报告 ② 血缘 + 真实门禁状态 ③ 修 export alias 重复 ④ 图表内联（报告自包含，断网可看）；后续可选导出 PDF / 挂 CI（CI 用 `report.py --test --offline`，冷检出要先预热缓存）。**方向 A 第四轮（可选）**：拼接断点检查 / PROV-JSON —— 系统至今**从未真正拼接**过序列，等真出现拼接再做
 - **方向 C 第一轮：FRED CPI —— 已完成（本轮）**：NBS「上年=100」vs FRED/OECD 10 年全部落「一致」档（最大 0.081 pp）。但 FRED 的原始数据来自 NBS（OECD 转述），**一致性只证明转述无误**
 - **方向 C 第二轮（下一步）**：再加一个源（OECD 直连 SDMX 或 BIS）。arbiter 的形状识别**本轮已改成数据驱动**（见 5.4），新源只要在对比产物里写 series_a / series_b 就能被自动识别
 - **方向 B（已暂停，需单独立项）**：桌面版装配链路。实测本会话真正生效的是 .dsh/econ-harvester.patch.yml 的 global insert，不是 preset 的 persona；共有三层注册机制、两份 preset 副本
@@ -442,26 +448,21 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 ### 6.4 数据目录（data/ 下内容全部被 .gitignore 忽略，只保留 .gitkeep）
 
-python/_probes/ 下另有 18 个 probe_*.py（NBS 接口考古证据）与 README.md，不参与生产链路、**只读不要删**。
-
 | 目录 | 内容 |
 |---|---|
-| data/raw/_http_cache/ | HTTP 原文存档（.bin 加 .meta.json），所有结论的最终证据 |
-| data/parsed/{nbs,worldbank,imf}/ | 按请求指纹的解析结果 |
+| data/raw/_http_cache/ · data/parsed/{nbs,worldbank,imf,fred}/ | HTTP 原文存档（所有结论的最终证据）；按请求指纹的解析结果 |
 | data/validated/{nbs,worldbank,imf,fred}/ | 长表（10 条声明式序列），materialize-validated 的产物 |
 | data/validated/missing_report.json | 缺失分类总报告（scan-missing 产物） |
 | data/validated/{arbiter,credibility}/ | 口径判定报告（7 对）/ 可信度评分报告（12 条） |
-| data/validated/cross_check/ | 三个对比脚本的结果 JSON |
-| data/processed/{nbs,worldbank,imf}/ | 带缺失元数据的行（10 个文件） |
+| data/validated/cross_check/ · data/processed/ | 对比结果 JSON（**5 个脚本**，自带 series_a/series_b/measured）；processed 是带缺失元数据的行（11 个文件 / 去重后 10 条序列） |
 | data/output/ | 产品：econ_data.csv / econ_data.db / data_dictionary.md / **report.html** / last_gate.json（最近一次门禁状态） |
 
-### 6.6 项目根其他文件
+### 6.5 项目根其他文件
 
 | 文件 | 一句话职责 |
 |---|---|
 | package.json | 声明 type: module，使 .mjs / .js 插件按 ESM 加载（不要删） |
-| pip_sandbox_install.py | 本沙箱环境的 pip 安装包装（装过 pyyaml / jinja2 / pandas / pyarrow） |
-| .gitignore | 忽略 .venv / .tools / node_modules 与 data 下五个子目录的内容 |
+| pip_sandbox_install.py · .gitignore | 沙箱 pip 安装包装（装过 pyyaml / jinja2 / pandas / pyarrow）；.gitignore 忽略 .venv / .tools / node_modules 与 data 下五个子目录 |
 
 ---
 
@@ -484,7 +485,6 @@ python/_probes/ 下另有 18 个 probe_*.py（NBS 接口考古证据）与 READM
     门禁：21/21 PASS（exit 0）
     working tree：<git status --short 的内容>
     数据：10 条声明式序列 / 152 行 / 10 缺失行（按行：series_start 5, discontinued 3, not_yet_published 2, true_gap 0）
-    下一步待办：方向 D 后续（可选）「图表内联 / 导出 PDF / 挂 CI」
 
 ### 7.2 改动后的固定动作
 
