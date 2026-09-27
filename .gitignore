@@ -1,0 +1,43 @@
+# Virtual environment and the project-local Python toolchain that backs it
+.venv/
+.tools/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Node
+node_modules/
+
+# Harvest outputs: the directories are tracked, their contents are not.
+# Ignoring a directory's contents (rather than the directory) is what lets the
+# .gitkeep files below be re-included.
+data/raw/*
+data/parsed/*
+data/validated/*
+data/processed/*
+output/*
+!data/**/.gitkeep
+!output/.gitkeep
+
+# DSH session state, if one is ever booted with this project as its home
+.dsh/sessions/
+.dsh/storages/
+
+# 追加：临时目录与缓存
+.pip-tmp/
+.tmp-pip/
+tmpgb9sfm6l/
+.dsh-scratch/
+
+# 备份文件
+*.bak
+*.bak-*
+
+# Node 编译缓存
+node-compile-cache/
+
+# Python 缓存
+__pycache__/
+*.pyc

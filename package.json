@@ -1,0 +1,7 @@
+{
+  "name": "econ-data-harvester",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Economic data harvesting: source adapters, parsers and validators feeding a DSH agent preset. type:module is load-bearing — it is what makes src/plugins/*.js loadable as ESM cordis plugins."
+}
