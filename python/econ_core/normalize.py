@@ -28,7 +28,8 @@ region_code      str      地区代码，如 "000000000000"
 region_name      str      地区名称（NBS 只返回 code，由调用方传入）
 indicator_id     str      指标语义标识（原始 ``i`` 字段）
 tree_node_id     str      取数用的树节点 id（请求参数 ``id``，不来自响应体）
-indicator_name   str      指标名称（原始 ``i_name``，可能为 None）
+indicator_name   str      指标名称（原始 ``i_name``；同 indicator_id 的行共享同一名称，
+                          上游返回 null 时由 :func:`_fill_indicator_names` 补齐）
 period           str      标准时间："2015" / "2020-01" / "2020-Q1"
 period_type      str      "annual" | "quarterly" | "monthly"
 value            float    数值（原始 ``v`` 转 float，空值 -> None）
@@ -96,12 +97,16 @@ __all__ = [
     "parse_period",
     "parse_value",
     "normalize_observations",
+    "normalize_worldbank_observations",
     "source_meta_from_parsed",
+    "source_meta_from_parsed_worldbank",
     "write_validated",
     "write_validated_parquet",
     "VALIDATED_DIR",
     "PARSED_NBS_DIR",
+    "PARSED_WORLDBANK_DIR",
     "SOURCE",
+    "SOURCE_WB",
 ]
 
 # --------------------------------------------------------------------------- #
@@ -112,6 +117,15 @@ SOURCE: str = "NBS"
 
 #: nbs_client 的 parsed 落盘目录（用于回填 raw_cache / fetched_at）
 PARSED_NBS_DIR: Path = http_client.PROJECT_ROOT / "data" / "parsed" / "nbs"
+
+#: World Bank 数据源标识（第二阶段新增）
+SOURCE_WB: str = "WorldBank"
+
+#: worldbank_client 的 parsed 落盘目录（用于回填 raw_cache / fetched_at）
+PARSED_WORLDBANK_DIR: Path = http_client.PROJECT_ROOT / "data" / "parsed" / "worldbank"
+
+#: World Bank 观测里被视为"已被消费"的原始字段：其余全部进 raw_fields
+WB_CONSUMED_KEYS: frozenset[str] = frozenset({"value", "unit"})
 
 #: 本模块的 validated 落盘目录
 VALIDATED_DIR: Path = http_client.PROJECT_ROOT / "data" / "validated" / "nbs"
@@ -261,6 +275,51 @@ def _row_sha16(row: dict[str, Any]) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# 缺失指标名补齐
+# --------------------------------------------------------------------------- #
+
+def _fill_indicator_names(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """让同一 indicator_id 的所有行共享同一个 indicator_name（原地写回并返回 rows）。
+
+    背景
+    ----
+    NBS 后端会有记录在 `i_name` 上返回 `null`（实测 2024 年 GDP 行的
+    `i_name` 就是 null，见 data/parsed/nbs/ 与 python/_probes/），但同一
+    `indicator_id` 的其它行带着完整名称，因此名称可以安全地组内补齐。
+
+    规则
+    ----
+    1. 组内取**首个非空** indicator_name 作为该组的规范名称（等价于前向填充，
+       并对"组首即缺失"的情况前向找到组内首个非空值）；
+    2. 若**整组**都没有非空名称，则用 `indicator_id` 兜底；
+    3. 只改 indicator_name 一个字段：不删行、不丢其它字段、保持行顺序。
+
+    注意
+    ----
+    本函数改了字段内容，调用方必须在**之后**重算 `row_sha16`，
+    否则行指纹与实际内容失配。
+
+    :param rows: normalize_observations 组装的行列表（函数内原地修改）。
+    :returns: 同一个列表对象。
+    """
+    canonical: dict[str, str] = {}
+    for row in rows:
+        iid = str(row.get("indicator_id") or "")
+        if iid in canonical:
+            continue
+        name = row.get("indicator_name")
+        if name not in (None, ""):
+            canonical[iid] = str(name)
+
+    for row in rows:
+        iid = str(row.get("indicator_id") or "")
+        filled = canonical.get(iid) or iid
+        if filled:
+            row["indicator_name"] = filled
+    return rows
+
+
+# --------------------------------------------------------------------------- #
 # 主转换
 # --------------------------------------------------------------------------- #
 
@@ -338,6 +397,11 @@ def normalize_observations(raw_data: Iterable[dict[str, Any]],
         row["row_sha16"] = _row_sha16(row)
         rows.append(row)
 
+    # 补齐 indicator_name（上游 i_name 可能为 null）后重算行指纹，保证指纹与内容一致
+    _fill_indicator_names(rows)
+    for row in rows:
+        row["row_sha16"] = _row_sha16(row)
+
     return rows
 
 
@@ -383,6 +447,122 @@ def source_meta_from_parsed(endpoint: str, request_params: dict[str, Any],
     raise NormalizeError(
         f"未在 {d} 找到 request 匹配的 parsed 文件（endpoint={endpoint}）。"
         f"请确认已用相同参数调用过 nbs_client，且 save=True。"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# World Bank 规范化与 meta 桥接（第二阶段新增；上方 NBS 路径逐字未动）
+# --------------------------------------------------------------------------- #
+
+#: World Bank 年度 date 是裸年份（"2020"），需补成 NBS 记法再复用 parse_period
+_RE_WB_BARE_YEAR = re.compile(r"^\d{4}$")
+
+
+def normalize_worldbank_observations(raw_data: Iterable[dict[str, Any]],
+                                     source_meta: dict[str, Any]) -> list[dict[str, Any]]:
+    """把 worldbank_client 返回的 `data` 数组转成与 NBS 同形的规范化长表。
+
+    与 `:func:normalize_observations` 的差异（World Bank 的记录形状不同）：
+
+    * 时间是 `date` 字段，年度就是**裸年份** `2020`（没有 NBS 的 YY 后缀），
+      这里补成 `2020YY` 再复用 `:func:parse_period`；
+    * 指标在 `indicator.{id,value}`，地区在 `country.{id,value}` 与
+      `countryiso3code`；
+    * 没有 tree_node_id 概念，该列固定空串；
+    * `raw_fields` 保留除 `value` / `unit` 外的全部原始键（含 `date` /
+      `indicator` / `country` / `decimal` 等）。
+
+    :param raw_data: worldbank_client 各接口返回的 data 数组。
+    :param source_meta: 支持 `region_name` / `fetched_at` / `raw_cache` /
+                        `source`（缺省 `WorldBank`）。
+    :returns: 与 NBS 同字段顺序的长表行。
+    :raises NormalizeError: 任一行时间或数值无法解析。
+    """
+    region_name = str(source_meta.get("region_name", "") or "")
+    fetched_at = str(source_meta.get("fetched_at", "") or _utc_now())
+    raw_cache = str(source_meta.get("raw_cache", "") or "")
+    source = str(source_meta.get("source", "") or SOURCE_WB)
+
+    rows: list[dict[str, Any]] = []
+    for idx, item in enumerate(raw_data):
+        if not isinstance(item, dict):
+            raise NormalizeError(f"第 {idx} 条观测不是 dict: {type(item).__name__} -> {item!r}")
+
+        raw_date = item.get("date")
+        if raw_date in (None, ""):
+            raise NormalizeError(f"第 {idx} 条观测缺少时间字段（date）: {item!r}")
+        s = str(raw_date).strip()
+        if _RE_WB_BARE_YEAR.match(s):
+            s = s + "YY"
+        try:
+            period, period_type = parse_period(s)
+        except NormalizeError as exc:
+            raise NormalizeError(f"第 {idx} 条观测时间解析失败: {exc}") from exc
+
+        try:
+            value = parse_value(item.get("value"))
+        except NormalizeError as exc:
+            raise NormalizeError(f"第 {idx} 条观测数值解析失败: {exc}") from exc
+
+        indicator = item.get("indicator")
+        indicator = indicator if isinstance(indicator, dict) else {}
+        country = item.get("country")
+        country = country if isinstance(country, dict) else {}
+
+        raw_fields = {k: v for k, v in item.items() if k not in WB_CONSUMED_KEYS}
+
+        row: dict[str, Any] = {
+            "region_code": str(item.get("countryiso3code") or country.get("id") or ""),
+            "region_name": region_name or str(country.get("value") or ""),
+            "indicator_id": str(indicator.get("id") or ""),
+            "tree_node_id": "",
+            "indicator_name": indicator.get("value"),
+            "period": period,
+            "period_type": period_type,
+            "value": value,
+            "unit": str(item.get("unit") or ""),
+            "source": source,
+            "fetched_at": fetched_at,
+            "raw_cache": raw_cache,
+            "row_sha16": "",
+            "raw_fields": json.dumps(raw_fields, ensure_ascii=False, sort_keys=True),
+        }
+        row["row_sha16"] = _row_sha16(row)
+        rows.append(row)
+
+    return rows
+
+
+def source_meta_from_parsed_worldbank(endpoint: str, request_params: dict[str, Any],
+                                      region_name: str = "",
+                                      parsed_dir: Optional[Path] = None) -> dict[str, Any]:
+    """从 worldbank_client 落盘的 parsed 文件回填 `raw_cache` / `fetched_at`。
+
+    与 `:func:source_meta_from_parsed` 同构，只是把目录换成
+    `data/parsed/worldbank/`、source 换成 `WorldBank`；
+    `request_params` 须与调用 worldbank_client 时完全一致
+    （用 `worldbank_client.indicator_request(...)` 构造即可）。
+
+    :raises NormalizeError: 找不到匹配的 parsed 文件。
+    """
+    d = parsed_dir or PARSED_WORLDBANK_DIR
+    candidates = sorted(d.glob(f"{endpoint}_*.json")) if d.is_dir() else []
+    for f in candidates:
+        try:
+            obj = json.loads(f.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if obj.get("request") == request_params:
+            return {
+                "region_name": region_name,
+                "fetched_at": obj.get("fetched_at", ""),
+                "raw_cache": obj.get("raw_cache", ""),
+                "source": SOURCE_WB,
+                "parsed_file": str(f),
+            }
+    raise NormalizeError(
+        f"未在 {d} 找到 request 匹配的 parsed 文件（endpoint={endpoint}）。"
+        f"请确认已用相同参数调用过 worldbank_client，且 save=True。"
     )
 
 
@@ -535,14 +715,24 @@ def _selftest() -> int:
         failures.append("未找到 2024 行")
     else:
         rf = json.loads(r2024["raw_fields"])
-        print(f"    2024 indicator_name = {r2024['indicator_name']!r}  (原始 i_name 即为 null)")
+        print(f"    2024 indicator_name = {r2024['indicator_name']!r}  (原始 i_name 为 null，已组内补齐)")
         print(f"    2024 raw_fields     = {r2024['raw_fields']}")
-        if r2024["indicator_name"] is not None:
-            failures.append(f"2024 indicator_name 期望 None，实际 {r2024['indicator_name']!r}")
+        if r2024["indicator_name"] != "国内生产总值":
+            failures.append(
+                f"2024 indicator_name 期望 '国内生产总值'，实际 {r2024['indicator_name']!r}"
+            )
         elif "i_name" not in rf or rf["i_name"] is not None:
             failures.append("2024 raw_fields 未保留原始 i_name 键")
         else:
-            print("    ✔ indicator_name=None 未崩溃，且 raw_fields 保留了原始 i_name")
+            print("    ✔ 2024 行 indicator_name 已补齐为 '国内生产总值'，"
+                  "且 raw_fields 保留了原始 i_name=null")
+
+    # 同一 indicator_id 的名称必须统一（本数据集只有 GDP 一个指标）
+    names = sorted({str(r["indicator_name"]) for r in rows})
+    if names != ["国内生产总值"]:
+        failures.append(f"同 indicator_id 的 indicator_name 未统一: {names}")
+    else:
+        print(f"    ✔ {len(rows)} 行 indicator_name 已统一为 {names[0]!r}")
 
     # 列完整性
     expected_cols = ["region_code", "region_name", "indicator_id", "tree_node_id",
