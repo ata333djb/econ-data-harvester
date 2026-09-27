@@ -224,6 +224,11 @@ def fetch_indicator_data(
 
     对应后端 `getEsDataByIndicatorIdAndDa`。
 
+    注意：**`cid` 参数被 NBS 后端忽略**。本接口实际按 `id`(tree_node_id) +
+    `rootId` + `da` + `dts` 选序列；`cid` 仅作请求标识留存，以防未来 NBS
+    改动接口。实测证据：把 `cid` 改成 `00000000000000000000000000000000` 后，
+    返回的观测与 raw 存档同正确 `cid` **逐字节相同**（sha256[:12]=`847200508cdb`）。
+
     :param cid: 指标节点 id（树节点 `_id`，通常为指标节点的 `treeinfo_pid`）。
     :param indicator_id: 指标 id（树里 `type=="indicator"` 节点的 `_id`）。
                         **必须传 `_id`，不能传 `i`/`ek_dp`**，否则返回 HTML 服务异常页。

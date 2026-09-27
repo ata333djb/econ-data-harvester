@@ -91,3 +91,30 @@ cd D:\universe\econ-data-harvester
   * raw 原始响应 → `data/raw/_http_cache/`（含首次逆向时下载的全部 JS bundle）
   * parsed 报告 → `data/parsed/nbs_*.json`（各轮扫描结果）
 * 本目录不参与生产链路；任何生产逻辑请改 `../econ_core/`。
+
+---
+
+## 已知观察：`cid` 被后端忽略，错 `cid` 会写出重复的 parsed 副本
+
+第二轮（World Bank 接入 + 交叉验证）验证门禁 FAIL 分支时，曾把
+`tools/compare-gdp.py` 里的 `NBS_CID` 临时改成 `00000000000000000000000000000000`
+再跑一次门禁，结果竟然是 **6/6 PASS（没有失败）**。查证后确认：这不是门禁漏报，
+而是一个真实的接口行为。
+
+* `getEsDataByIndicatorIdAndDa` **忽略 `cid`**：它按 `id`(=tree_node_id) +
+  `rootId` + `da` + `dts` 选序列。错 `cid` 返回的观测与正确 `cid` 完全相同，
+  连 raw 存档都**逐字节一致**（361 字节，sha256[:12]=`847200508cdb`）；
+  响应体里也没有 `cid` 字段（回显为空）。该参数不参与任何服务端判定。
+* **副作用（数据血缘隐患，本轮不修）**：`nbs_client` 的 parsed 落盘文件名是
+  `sha256(规范化 request 参数)[:16]`，而 `cid` 在 request 里。于是错 `cid`
+  的调用会在 `data/parsed/nbs/` 下写出**另一个指纹的文件**，内容与正版逐字节相同：
+
+  | request 里的 cid | parsed 文件 |
+  |---|---|
+  | `f7fd25aaad184414875632cf2327da60`（正确） | `getEsDataByIndicatorIdAndDa_4441bd14d17607d5.json` |
+  | `00000000000000000000000000000000`（错） | `getEsDataByIndicatorIdAndDa_bb224db5c889f098.json` |
+
+  同一份数据因此会有两份不同指纹的副本，事后按 `request` 追溯来源时容易误判。
+* 处理决定：**只记录不修**。可选修法（把 `cid` 从 request 指纹里剔除、或落盘前
+  校验 `cid` 是否在期望集合内）都会改到生产链路的落盘规则，在 NBS 明确接口语义
+  之前保持现状。`nbs_client.fetch_indicator_data` 的 docstring 已就地记录该行为。

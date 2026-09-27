@@ -56,7 +56,7 @@ PYTHON: str = r"D:\universe\econ-data-harvester\.venv\Scripts\python.exe"
 PYTHONPATH: str = str(PROJECT_ROOT / "python")
 
 #: 单项超时（秒）
-TIMEOUT_S: int = 120
+TIMEOUT_S: int = 180
 
 #: 名称列 + 点号的合计宽度（对齐用）
 DOTS_WIDTH: int = 33
