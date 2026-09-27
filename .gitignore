@@ -42,3 +42,6 @@ node-compile-cache/
 # Python 缂撳瓨
 __pycache__/
 *.pyc
+
+# 打包产物：只打 zip 分发，不进 git
+dist/

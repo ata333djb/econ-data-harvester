@@ -1,0 +1,37 @@
+MIT License
+
+Copyright (c) 2026 EconDataHarvester contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+===============================================================================
+关于**数据**（与上面的软件许可无关，请注意区分）
+===============================================================================
+
+本许可只覆盖本项目的**代码**。程序运行时取回的数据属于各自的发布机构，
+版权与使用条款归各发布方，常见的有：
+
+  * 国家统计局（NBS）—— 中国政府网数据，按其网站声明使用
+  * World Bank Open Data —— CC BY 4.0
+  * IMF DataMapper / WEO —— IMF 版权，使用时须注明来源
+  * FRED（圣路易斯联储）—— 各序列版权归原始发布方，FRED 仅转载
+  * BIS —— 转载各国官方统计，BIS 版权
+
+`examples/report.html` 的「许可证汇总」一节列出了本项目实际用到的数据来源
+及其条款。**把数据再分发给第三方之前，请自行确认各来源的许可要求。**

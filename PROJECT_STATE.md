@@ -3,14 +3,16 @@
 - 生成时间：2026-09-27
 - 面向对象：**新对话的 Agent**。读完之后应当能直接继续工作，不需要回看任何历史对话。
 - 维护规则：每完成一轮实质改动就更新本文件。**只写状态**，不写历史对话，不粘贴代码，只给路径与一句话职责。
-- **篇幅上限：≤720 行**（2026-09-27 四调：原 500 -> 550 -> 600 -> 700 -> 720）。
+- **篇幅上限：≤790 行**（2026-09-27 五调：原 500 -> 550 -> 600 -> 700 -> 720 -> 790）。
   **每次放宽都必须在这里写清"多出来的是哪个方向的哪一节"**，否则上限会一路变成没有上限：
-  - 600 -> 700：方向 E 第一轮（指标目录），新增 §1.4 / §2.13 / §3.15-3.17 / §5.3① / §6 / §7 六处
+  - 600 -> 700：方向 E 第一轮（指标目录），新增 §1.4 / §2.13 / §3.15-3.17 / §5.3① / §6 / §7
   - 700 -> 720：方向 E 第二轮（`edh fetch`），新增 §2.14 + §3.18，并把 §1.4/§1.5 换成新一轮。
-    **本轮先做过一轮压缩**（725 -> 711，压的是 §1.4/§2.14/§3.15-3.18 里与模块 docstring
-    重复的部分），压不动了才放宽 20 行 —— 顺序是先压后放，不是直接放。
+    **那一轮先做过压缩**（725 -> 711，压的是与模块 docstring 重复的部分），压不动才放宽 20 行
+  - 720 -> 790：方向 F（打包分发），新增 §1.4 / §2.15 / §3.19，并把 §1.4/§1.5 换成新一轮。
+    这一轮新增的**全是"只有真跑一遍才会暴露"的坑**（§3.19），删掉就等于让下一个人
+    重踩一遍 —— 正是本文件最不该省的那类内容
   本文件内容是坑 + 约定 + 教训，**删任何一条都会增加后人重踩的风险**，所以宁可放宽也不删条目。
-  设立上限的目的是「新 Agent 能一次读完」（720 行中文约 10000-13000 token），**不是为了压而压**。
+  设立上限的目的是「新 Agent 能一次读完」（790 行中文约 11000-14000 token），**不是为了压而压**。
 
 权威性顺序（冲突时以序号小的为准）：
 
@@ -140,31 +142,45 @@ cross_check 三样产物（不能挪到 arbiter 旁）；**splice-cpi 读 materi
     6. nbs|surveyed_unemployment（起点 2018）      12. bis|WS_LONG_CPI|M.CN.628（指数 2010=100，380 期）
     别名：NBS|000000000000|db8e5a86c08246e79b1b11251927e740 -> 指向第 1 条（不计入 12 条）
 
-### 1.4 最近一轮新增（方向 E 第二轮：`edh fetch` —— 从"能看清单"到"能拿数据"）
+### 1.4 最近一轮新增（方向 F：打包成"不懂技术的人也能用"的版本）
 
-- **`python/econ_core/fetcher.py`** —— 取数适配层，把五家 client 的差异全吃掉：
-  `fetch_indicator()` / `fetch_all_sources()` / `cross_check()` / `annualize_rows()`，
-  `last_notes()` 报**每个源这一轮怎么了**（沿用五个 client 的 `last_meta()` 惯例）
-- **`tools/edh.py fetch`** —— `--region / --source / --from / --to / --frequency /
-  --output(-o) / --format csv|json / --cross-check / --quiet / --allow-forecast`。
-  **CSV 到 stdout、简报到 stderr**（stdout 永远可以直接 `> x.csv` 或进管道）
-- **门禁 26 -> 28**：`fetcher --test`（联网，约 15 次请求）+ `edh fetch smoke`（真敲的那条命令）
-- **本轮修掉 3 个由自检/实测抓出的 bug**（全在输出/簿记层，断言不会变红的那种）：
-  `last_notes()` 被后一个源清空；`csv.writer` 行尾 + Windows stdout 翻译导致**每行多一个空行**；
-  `unit` 字符串直接比会**误报"口径不同"**。逐条见 §3.18
-- **交叉验证的立场（重要）**：`--cross-check` **不替用户做单位换算**。
-  两侧 unit 不同时判 `口径不同`，并把**绝对差**标成"仅供参考"。CPI 四源实测 6 对里
-  只有 **World Bank vs BIS 可比**（同为 2010=100，相对差 0.337% -> 可直接拼接），
-  其余 5 对因基期/口径不同被判不可比。这是**结论不是缺陷**：NBS 是「上年=100」、
-  FRED 是「2015=100」、BIS 重定基 2010=100，硬算出来的差异率没有意义（§3.10/§5.4）
+目标：**用户电脑上不用装 Python**，解压即用。方案选**内嵌 Python（embeddable）**而不是
+PyInstaller —— 改代码只改 `.py`、用户不用重下，也没有杀软误报。
+
+- **`tools/analyze-deps.py`** —— AST 量 import 闭包（含函数体内的 import），
+  区分 stdlib / 本地 / 第三方。**"要装哪几个包"不能靠翻 requirements**：
+  `fetcher.py` 那行 `from . import (bis_client, ...)` 第一版没展开子模块，
+  八个 client 一个都没进闭包，第三方依赖被少报
+- **`tools/download.py`** —— 用 venv 的 OpenSSL 栈下载。**必需**：本机走 .NET/WinHTTP
+  的下载全部 TLS 失败（§2.1），`Invoke-WebRequest python.org/...zip` 直接报
+  "基础连接已经关闭"，同一个 URL 用本脚本成功
+- **`tools/make-dist-zip.py`** —— 自己写 zip 而不是 `Compress-Archive`（**正斜杠**问题，§3.19）
+- **`LICENSE`** —— MIT（本轮新增，此前项目没有任何 license）
+- **`dist/`** —— `edh.bat` + `embedded-python/`（Python 3.12.7 + PyYAML 6.0.3）+
+  `python/`（econ_core）+ `tools/edh.py` + `examples/` + `README.md` + `LICENSE`。
+  **已加进 .gitignore**（只打 zip 分发）；打包走**白名单**，不把 `.build/`、`.tmp/`、
+  get-pip.py 带进用户包
+- **`dist/README.md`** —— 面向非技术用户，149 行，不出现代码/架构/门禁/PYTHONPATH
+- **干净环境测试（7 步全过）**：解压到 `D:\tmp\edh-test` -> `edh.bat list`（18 指标，exit 0）
+  -> `info CPI`（exit 0）-> `fetch CPI --from 2020 --to 2024 --output test.csv`（exit 0）
+  -> CSV 131 行 / BOM `EF BB BF` / 中文完整 -> `report.html` 0 个外部 `src=`（全内联）
+- **本轮抓到 3 个"只有真跑一遍才会暴露"的问题**（§3.19）：`http_client` 的 venv 守卫
+  让 `fetch` 在用户包里**完全不可用**；控制台码页 936 与 UTF-8 输出不匹配导致中文全花；
+  `.bat` 里写中文会被 cmd 按码页读成乱码并当成命令执行
 
 ### 1.5 更早几轮（压缩存档）
 
+- **方向 E 第二轮（`edh fetch`）**：`fetcher.py` 取数适配层 + `edh.py fetch`
+  （CSV 到 stdout / 简报到 stderr / `--cross-check`）+ 门禁 26 -> 28。
+  当轮修 3 个输出层 bug、踩的坑见 §3.18。**交叉验证的立场**：`--cross-check`
+  **不替用户做单位换算**，unit 不同就判「口径不同」并把绝对差标"仅供参考" ——
+  CPI 四源 6 对里只有 World Bank vs BIS 真可比（同为 2010=100）
 - **方向 E 第一轮（指标目录）**：`catalog_data.yaml`（18 指标 / 51 源映射）+ `catalog.py`
   （`list_indicators` / `get_indicator` / `get_source_config` + `--test`）+ `tools/edh.py`
   （`list` / `info` / `summary`）+ `_probes/probe_catalog_sources.py`（8 阶段取证脚本）；
   门禁 24 -> 26。51 条映射**逐条真跑过取数**，另有 3 条"探过、确认对中国取不到数据"留痕未收录。
   当轮踩的坑见 §3.15-3.17
+
 
 - **方向 C 第五轮（rebase）**：`splicer.rebase()` 的 `ratio`/`difference` 两模式 + `splice(rebase=...)`；
   自检 46 -> 58 项。**关键结论：rebase 只调水平不调斜率，对当前 CPI 用例无效** ——
@@ -319,6 +335,28 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
   标成"仅供参考"，绝不硬报一个"冲突"（`_unit_key()` 的规矩见 §3.18 第三条）
 - **stdout 是数据、stderr 是人话**（同 §2.2）：CSV 走 stdout，简报走 stderr，
   所以 `edh fetch CPI > cpi.csv` 永远得到干净的 CSV
+
+### 2.15 分发包（`dist/`）的规矩
+
+- **用户包里没有 `.venv`，因此 `http_client` 的 venv 守卫必须绕过**。
+  `edh.bat` 里 `set ECON_HTTP_ALLOW_NON_VENV=1` 是**必需项不是可选项** ——
+  没有它每个请求都会被拒，`edh fetch` 在用户机器上完全不可用（§3.19）。
+  敢绕过的依据是**实测**：内嵌解释器自带 `libssl-3.dll`/`libcrypto-3.dll`
+  （OpenSSL 3.0.15），对 `data.stats.gov.cn` 与 `api.worldbank.org` 都是 HTTP 200
+- **`.bat` 必须纯 ASCII**。cmd.exe 按**控制台码页**读 .bat，写中文会被读成乱码
+  并当成命令执行（实测报 `'0' is not recognized as an internal or external command`）。
+  校验方式：`非 ASCII 字节数 == 0`
+- **控制台码页要对齐**：Python 侧发 UTF-8，而控制台默认是 936(GBK)/437。
+  两边不对齐中文就是花的。`edh.bat` 里 `chcp 65001` 并在结束时**恢复原码页**
+  （实测 936 -> 65001 -> 936）
+- **打包范围是白名单**，不是"dist/ 下所有东西"：`.build/`、`.tmp/`、`get-pip.py`、
+  下载缓存都是构建脚手架，不该进用户包。`make-dist-zip.py` 里有一条自检断言这件事
+- **zip 路径必须正斜杠**（APPNOTE 4.4.17.1）。`Compress-Archive` 写反斜杠，
+  Windows 资源管理器能解所以**本地测不出来**，但 Linux/macOS 的 unzip 会把整条路径
+  当成一个文件名（§3.19）
+- **`python/` 只带 `econ_core`**（不含 `_probes`、`__pycache__`）；`tools/` 只带 `edh.py`
+- **改完代码要重打 zip**：`.venv\Scripts\python.exe tools\make-dist-zip.py`
+  （分发的是 `.py` 源码，所以改代码后**必须重打**，用户重下才拿到新版）
 
 ---
 
@@ -532,6 +570,28 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
   **本来可比**的一对判成"口径不同"。但也不能粗暴归一化 —— `指数（上年=100）` 与
   `指数（2010=100）` **必须**保持不同。`_unit_key()` 只剥频率词，**基期数字原样保留**
 
+### 3.19 ⚠️ 打包的三个坑：只有"真解压出来跑一遍"才会暴露
+
+三个问题在开发目录里**全部看不出来** —— 因为开发目录有 `.venv`、有这个控制台、
+有 Compress-Archive 的 Windows 容错。干净环境测试（解压到别处再跑）一次全撞出来：
+
+- **`http_client` 的 venv 守卫让 `fetch` 在用户包里 100% 失败**。`assert_venv()` 要求
+  解释器是"项目 venv"，而用户包里根本没有 `.venv`，于是 `_venv_python()` 返回 None、
+  每个源都报 `RuntimeError: 本模块必须使用项目 venv 的 Python 运行`，
+  `edh fetch` 退出码 2 且一行数据都没有。修法是 `edh.bat` 设
+  `ECON_HTTP_ALLOW_NON_VENV=1`（http_client 自带、写在 docstring 里的出口），
+  依据是内嵌解释器自带 OpenSSL —— **绕之前先实测 TLS 通不通**，
+  别因为"想让它跑起来"就绕
+- **控制台码页与输出编码不匹配 -> 中文全花**。实测 `chcp` = **936**，而进程写的是
+  **UTF-8**（`PYTHONIOENCODING=utf-8`），于是 `指标目录` 显示成 `鎸囨爣鐩綍`。
+  **管道/重定向时看不出来**（字节是对的，按 UTF-8 解码就正常），只有真控制台才暴露。
+  修法 `chcp 65001` + 结束恢复。验收要**从 936 开始跑**并确认前后都是 936
+- **`Compress-Archive` 写反斜杠路径**。ZIP 规范要求正斜杠；Windows 资源管理器容错，
+  所以本地解压"看着没问题"，但 Python `zipfile`、Linux/macOS `unzip` 会把
+  `embedded-python\python.exe` 当成**一个文件名**。改用 `zipfile` + `as_posix()`
+- 附带：`Encoding.ASCII` 会**静默**把非 ASCII 字符替换成 `?`（拿它把 .bat 归一化时，
+  注释里的中文示例变成了 `"?????"`）。用 ASCII 编码写文件前，确认源文本本来就是 ASCII
+
 ## 4. 架构图
 
 ### 4.1 主干（从上到下）
@@ -655,6 +715,10 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
 - **`tools/`** —— 门禁与加工层：
   `run-all-checks.py`（门禁总入口，28 项，失败即停，支持逐检查 timeout 覆盖）·
   `edh.py`（**用户 CLI**：`list` / `info` / `summary` 纯离线，`fetch` **联网** —— §2.14）·
+  **打包三件套（方向 F，都不在门禁里，手工跑）**：
+  `analyze-deps.py`（AST 量 import 闭包，回答"要装哪几个第三方包"）·
+  `download.py`（用 OpenSSL 栈下载，本机唯一能通的方式，§2.1）·
+  `make-dist-zip.py`（打分发 zip，白名单 + 正斜杠，§2.15）·
   `check-cli-envelope.py`（契约测试，真跑 12 子命令 / 13 用例，R1-R11，420s）·
   `smoke-{nbs,worldbank,imf,fred,bis}-adapter.mjs`（五个插件的 argv 桩测）·
   `verify-preset.mjs`（preset 装配校验，**不在门禁里，手工跑**）·
@@ -679,7 +743,14 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
   `raw/_probe_catalog/`（**指标目录的取证物**：`verified.json` 逐条映射的取数结果、
   `nbs_index.json` 三个目录树拍平、`diag_range.json` 停更期、`diag_wb.json` 宽窗口复核）
 - **项目根**：`package.json`（声明 `type: module`，使 .mjs/.js 插件按 ESM 加载，**不要删**）·
-  `pip_sandbox_install.py` + `.gitignore`（忽略 .venv/.tools/node_modules 与 data 下五个子目录）
+  `LICENSE`（MIT，方向 F 新增；另附数据许可说明）·
+  `pip_sandbox_install.py` + `.gitignore`（忽略 .venv/.tools/node_modules、data 下五个子目录、**dist/**）
+- **`dist/`（不进 git，只打 zip）**：`edh.bat`（**纯 ASCII**，设 PYTHONPATH /
+  ECON_HTTP_ALLOW_NON_VENV / chcp 65001，§2.15）· `embedded-python/`（Python 3.12.7
+  embeddable + PyYAML 6.0.3）· `python/econ_core/` · `tools/edh.py` ·
+  `examples/{report.html,econ_data.csv,data_dictionary.md}` · `README.md`（面向非技术用户）·
+  `LICENSE` · `econ-data-harvester-v0.2.zip`（12.5 MB）。
+  **`dist/.build/` 与 `dist/.tmp/` 是构建脚手架，不进 zip**
 
 ---
 
