@@ -242,6 +242,11 @@ def main() -> int:
         "n_compared": len(diffs),
         "max_abs_diff_pp": max_abs,
         "mean_abs_diff_pp": mean_abs,
+        # 数据驱动字段（arbiter 只读这三个；上面的 max_abs_diff_pp 留给人和旧读者）
+        "series_a": "nbs|gdp|index_prev_year_100",
+        "series_b": "imf|NGDP_RPCH",
+        "measured": {"diff_pp": max_abs, "diff_type": "pp",
+                     "source": "data/validated/cross_check/" + out.name},
         "rows": table,
         "problems": problems,
     }

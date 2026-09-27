@@ -289,6 +289,17 @@ def main() -> int:
         "fx_rates": rates,
         "nbs_vs_imf": res_ni["summary"],
         "wb_vs_imf": res_wi["summary"],
+        # 数据驱动字段：本文件产出两对，放 pairs 数组（arbiter 逐条读）
+        "pairs": [
+            {"series_a": "nbs|gdp|cny_100m", "series_b": "imf|NGDPD",
+             "measured": {"diff_pp": (res_ni.get("summary") or {}).get("max_diff_rate"),
+                          "diff_type": "percent",
+                          "source": "data/validated/cross_check/" + out.name}},
+            {"series_a": "worldbank|NY.GDP.MKTP.CN", "series_b": "imf|NGDPD",
+             "measured": {"diff_pp": (res_wi.get("summary") or {}).get("max_diff_rate"),
+                          "diff_type": "percent",
+                          "source": "data/validated/cross_check/" + out.name}},
+        ],
         "common_years": common3,
         "rows": table,
         "problems": problems,

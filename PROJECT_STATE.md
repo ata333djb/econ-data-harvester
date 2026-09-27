@@ -114,12 +114,12 @@
 10. fred|CHNCPIALLMINMEI（FRED/OECD 中国 CPI 指数，月度 -> 年均值；**本轮新增**）
 11. NBS|000000000000|db8e5a86c08246e79b1b11251927e740（**别名**，指向第 1 条）
 
-### 1.4 最近一轮新增（方向 C 第一轮：FRED CPI 交叉验证）
+### 1.4 最近一轮新增（arbiter 改成数据驱动）
 
-- 新增 python/econ_core/fred_client.py + fred_client_cli.py + src/plugins/fred-adapter.js + tools/smoke-fred-adapter.mjs（第二个独立源，免密钥 fredgraph.csv 直取）
-- 新增 tools/compare-cpi.py：NBS「上年=100」vs FRED/OECD「2015=100 指数」→ 先年均值再转同比，逐年比对（阈值 0.3/1.0/2.0 pp）
-- 实测结论：10 年**全部落在「一致」档**（最大 |差| 0.081 pp、均值 0.031 pp）——但 FRED 的原始数据来自 NBS（OECD 转述），这证明的是**转述无误**，不等于独立验证
-- 数据规模 9 -> **10 条序列**、142 -> **152 行**；门禁 19 -> **21 项**
+- python/econ_core/arbiter.py —— `_adapt` 重写：读产物自带的 `series_a` / `series_b` / `measured`（或 `pairs` 数组），不再按键名猜形状；缺字段只记 warning
+- 5 个对比脚本（compare-gdp / -3way / -real / -unemployment / -cpi）输出都补了这三个字段（多对用 `pairs` 数组）
+- 效果：arbiter **7 对、0 warning**；CPI 对（NBS × FRED）判「可桥接」——KB 里写的 comparability 是 medium，而 KB 是人工判据，不由脚本改
+- 教训已记进 §5.4：曾因键名 `max_abs_diff_pp` 撞车，产出过一条错配的第 7 对
 
 ---
 
@@ -372,25 +372,25 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 ### 5.1 方向 A 第二轮：口径判定 Arbiter —— 已完成
 
-- 产出：python/econ_core/arbiter.py + 报告落盘 data/validated/arbiter/（**6 对** + _index.json）；实测差异读 cross_check/*.json **不重跑取数**；高影响 unknown -> 人工复核，低影响 unknown -> 保留原判定；alignment 记画像与实测是否同调（见 5.4）
+- 产出：python/econ_core/arbiter.py + 报告落盘 data/validated/arbiter/（**7 对** + _index.json）；实测差异读 cross_check/*.json **不重跑取数**；高影响 unknown -> 人工复核，低影响 unknown -> 保留原判定；alignment 记画像与实测是否同调（见 5.4）
 
 ### 5.2 方向 A 第三轮：可信度评分 —— 已完成
 
-- 产出：python/econ_core/credibility.py + 报告落盘 data/validated/credibility/（11 条 + _index.json）
+- 产出：python/econ_core/credibility.py + 报告落盘 data/validated/credibility/（12 条 + _index.json）
 - 五维加权：Expertise 0.25 / Provenance 0.20 / Timeliness 0.10 / Transparency 0.15 / Coherence 0.30 -> 0-100 分 + high/medium/low。当前 **12 条**：9 high / 3 medium；最高 nbs|surveyed_unemployment 95.5，最低 imf|NGDP_RPCH 77.25；两条只对比不落盘的序列 provenance 只有 30（没有 series_file）
 
 ### 5.3 方向 D 与之后的待办
 
-- **方向 D 已完成四轮**：① HTML 质量报告（8 节）② 数据血缘 + 真实门禁状态 ③ 修 export 的 alias 重复 ④ **图表内联（报告自包含，断网可看）**
-- **方向 D 后续（可选）**：导出 PDF / 把报告挂到 CI（CI 用 `report.py --test --offline` 可复现，但要**先预热缓存**：冷检出没有 raw 存档，首次仍得联网拉一次 Plotly；门禁本身仍用不带 --offline 的 `report.py --test`）
+- **方向 D 已完成四轮**：① HTML 质量报告 ② 数据血缘 + 真实门禁状态 ③ 修 export 的 alias 重复 ④ 图表内联（报告自包含，断网可看）。后续可选：导出 PDF / 挂 CI（CI 用 `report.py --test --offline` 可复现，但要**先预热缓存**——冷检出没有 raw 存档，首次仍得联网拉一次 Plotly；门禁本身仍用不带 --offline 的 `report.py --test`）
 - **方向 A 第四轮（可选）**：拼接断点检查 / PROV-JSON 溯源导出 —— 还没开始；注意系统至今**从未真正拼接**过序列，断点检查暂时没有对象
 - **方向 C 第一轮：FRED CPI —— 已完成（本轮）**：NBS「上年=100」vs FRED/OECD 10 年全部落「一致」档（最大 0.081 pp）。但 FRED 的原始数据来自 NBS（OECD 转述），**一致性只证明转述无误**
-- **方向 C 第二轮（下一步）**：再加一个源，并补 **arbiter 的形状识别**——`arbiter._adapt` 现在是**按硬编码序列对**写形状的（nbs_vs_imf / registered_vs_imf_pp / max_abs_diff_pp），所以 CPI 这对进不了 arbiter（仍是 6 对 + 1 条 warning）。要变成 7 对必须改 arbiter，本轮约束禁止
+- **方向 C 第二轮（下一步）**：再加一个源（OECD 直连 SDMX 或 BIS）。arbiter 的形状识别**本轮已改成数据驱动**（见 5.4），新源只要在对比产物里写 series_a / series_b 就能被自动识别
 - **方向 B（已暂停，需单独立项）**：桌面版装配链路。实测本会话真正生效的是 .dsh/econ-harvester.patch.yml 的 global insert，不是 preset 的 persona；共有三层注册机制、两份 preset 副本
 - **落地插值**：当前 true_gap = 0 例，所以插值实现故意留空（出现 interpolate 会抛 NotImplementedError）。等真遇到上游序列中断再实现，并同步补回归
 
 ### 5.4 已知的小尾巴
 
+- **arbiter 曾按硬编码序列对识别形状，差点把 CPI 对比错配给 GDP 指数对**：compare-cpi.py 最初写的顶层键 `max_abs_diff_pp` 命中 `_adapt` 的 GDP 指数形状，产出一条「看起来 7 对、实际第 7 对是错的」结果（`measured.source` 指向 cpi 文件，pair_key 却是 GDP）。已改为数据驱动（产物自带 `series_a` / `series_b` / `measured`，旧的键名形状只记 warning）。这是「数据驱动 vs 硬编码」的活教材：**按键名猜语义，迟早错配**
 - aggregated_from_months 只存在于 validated / processed 的 JSON 层，**不在 CSV / SQLite 里**（输出层 14 列是定案集合，export.py 未改）。要它可见就追加为第 15 列，或折进 missing_evidence
 - compare-gdp-3way 的 timeout 已放宽到 420s，但实测波动大（16.5s -> 85.1s -> 74.1s），若再变慢要考虑拆项；**arbiter 的 verdict 与 recommended_action 可能不同调**（gdp × imf|NGDPD：画像=可桥接，实测=noise/splice）——已用 alignment=profile_stricter 显式记录，要真正统一得改 source_profiler 的归因规则
 
@@ -450,7 +450,7 @@ python/_probes/ 下另有 18 个 probe_*.py（NBS 接口考古证据）与 READM
 | data/parsed/{nbs,worldbank,imf}/ | 按请求指纹的解析结果 |
 | data/validated/{nbs,worldbank,imf,fred}/ | 长表（10 条声明式序列），materialize-validated 的产物 |
 | data/validated/missing_report.json | 缺失分类总报告（scan-missing 产物） |
-| data/validated/{arbiter,credibility}/ | 口径判定报告（6 对）/ 可信度评分报告（11 条） |
+| data/validated/{arbiter,credibility}/ | 口径判定报告（7 对）/ 可信度评分报告（12 条） |
 | data/validated/cross_check/ | 三个对比脚本的结果 JSON |
 | data/processed/{nbs,worldbank,imf}/ | 带缺失元数据的行（10 个文件） |
 | data/output/ | 产品：econ_data.csv / econ_data.db / data_dictionary.md / **report.html** / last_gate.json（最近一次门禁状态） |

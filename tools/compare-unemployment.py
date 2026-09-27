@@ -122,6 +122,13 @@ def _num(v: Any) -> Optional[float]:
     return None
 
 
+def _max_abs(rows: list[dict[str, Any]], field: str) -> Optional[float]:
+    """rows[].<field> 里所有数值的绝对值最大值（供 measured.diff_pp 用）。"""
+    vals = [abs(float(r[field])) for r in rows
+            if isinstance(r.get(field), (int, float)) and not isinstance(r.get(field), bool)]
+    return max(vals) if vals else None
+
+
 def _fmt(v: Any, width: int = 16) -> str:
     f = _num(v)
     return f"{f:>{width},.2f}" if f is not None else f"{'—':>{width}}"
@@ -304,6 +311,17 @@ def main() -> int:
             "imf": {"indicator": IMF_INDICATOR, "country": IMF_COUNTRY},
         },
         "n_common": n_common,
+        # 数据驱动字段：本文件产出两对（登记 vs LUR、调查 vs LUR），差值取各年 |差异| 的最大值
+        "pairs": [
+            {"series_a": "nbs|registered_unemployment", "series_b": "imf|LUR",
+             "measured": {"diff_pp": _max_abs(table, "registered_vs_imf_pp"),
+                          "diff_type": "pp",
+                          "source": "data/validated/cross_check/" + out.name}},
+            {"series_a": "nbs|surveyed_unemployment", "series_b": "imf|LUR",
+             "measured": {"diff_pp": _max_abs(table, "surveyed_vs_imf_pp"),
+                          "diff_type": "pp",
+                          "source": "data/validated/cross_check/" + out.name}},
+        ],
         "rows": table,
         "problems": problems,
         "note": "展示口径差异的结构，不判定差异是否可接受",

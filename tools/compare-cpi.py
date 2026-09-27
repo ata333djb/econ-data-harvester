@@ -234,6 +234,11 @@ def main() -> int:
         },
         "basis": "两边都转成「上年=100」的年度同比",
         "n_common": n_common,
+        # 数据驱动字段：arbiter 靠 series_a / series_b 知道这对是「谁和谁」
+        "series_a": f"nbs|cpi|{CPI_SERIES_NAME}",
+        "series_b": f"fred|{FRED_SERIES}",
+        "measured": {"diff_pp": max_abs, "diff_type": "pp",
+                     "source": "data/validated/cross_check/" + out.name},
         # 注意键名：**故意不叫 max_abs_diff_pp** —— 那个名字是 tools/compare-gdp-real.py 的
         # 形状标记，arbiter._adapt 会据此把它认成「NBS GDP 指数 × IMF NGDP_RPCH」。
         # 叫同名会让 CPI 这对被**误认成 GDP 那对**（实测踩到过：7 对里有 1 对是错配）。

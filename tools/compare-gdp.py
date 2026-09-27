@@ -197,7 +197,16 @@ def main() -> int:
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out = RESULTS_DIR / "gdp_nbs_vs_worldbank.json"
+    src_rel = "data/validated/cross_check/" + out.name
     payload = {
+        # 数据驱动字段：arbiter 靠这两个键知道这对是「谁和谁」，不再按键名猜形状
+        "series_a": "nbs|gdp|cny_100m",
+        "series_b": "worldbank|NY.GDP.MKTP.CN",
+        "measured": {
+            "diff_pp": (result.get("summary") or {}).get("max_diff_rate"),
+            "diff_type": "percent",
+            "source": src_rel,
+        },
         "nbs": {"source": "NBS", "unit_raw": nbs_unit, "factor_to_yuan": nbs_to_yuan},
         "wb": {"source": "WorldBank", "unit_raw": wb_unit, "factor_to_yuan": wb_to_yuan},
         "base_unit": BASE_UNIT,

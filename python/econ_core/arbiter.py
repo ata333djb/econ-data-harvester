@@ -26,14 +26,17 @@ arbiter 把两者配成一条记录，给出四值判定：
 
 数据来源
 --------
-实测差异不重跑取数，直接读 data/validated/cross_check/*.json 的产物。已知四种形状：
+实测差异不重跑取数，直接读 data/validated/cross_check/*.json 的产物。
+**形状是数据驱动的**：每个产物自带序列键与实测差异，arbiter 不按文件名或键名猜——
 
-    gdp_nbs_vs_worldbank.json  result.summary.max_diff_rate      (percent)
-    gdp_3way_*.json            nbs_vs_imf / wb_vs_imf.max_diff_rate (percent)
-    gdp_real_*.json            max_abs_diff_pp                    (pp)
-    unemployment_3way_*.json   rows[].registered_vs_imf_pp / surveyed_vs_imf_pp (pp)
+    {"pairs": [{"series_a": "...", "series_b": "...",
+                "measured": {"diff_pp": 0.031, "diff_type": "pp", "source": "..."}}]}
 
-识别不出来的形状跳过并记 warning，不抛异常、不中断整轮。
+（单对时这三个字段也可以直接放顶层。）缺字段的产物记 warning 跳过，不抛异常、不中断整轮。
+
+历史教训：以前是**按键名**硬编码识别形状的 —— compare-cpi.py 一度因为用了
+max_abs_diff_pp 这个键名被误认成「NBS GDP 指数 × IMF NGDP_RPCH」，产出一条
+看起来对、实际错配的第 7 对。详见 _adapt 的 docstring。
 
 两条容易误读的约定
 ------------------
@@ -134,7 +137,8 @@ def _alignment(verdict: str, action: str) -> str:
 HIGH_IMPACT_FIELDS: frozenset[str] = frozenset(
     {"statistical_method", "coverage", "population_scope"})
 
-#: cross_check 产物里只有数据源代码，没有 series_key；这里做一次显式映射。
+#: 各 compare 脚本写进 cross_check 产物的规范序列键。arbiter 只把它们当字符串用
+#: （不再靠它们猜形状 —— 形状由产物的 series_a / series_b 自己声明），自检直接引用。
 GDP_NBS = "nbs|gdp|cny_100m"
 GDP_WB = "worldbank|NY.GDP.MKTP.CN"
 GDP_IMF = "imf|NGDPD"
@@ -145,6 +149,9 @@ UNEMP_IMF = "imf|LUR"
 #: 期望行为是「跳过 + warning」，本模块故意不为它们造知识库条目。
 GDP_INDEX = "nbs|gdp|index_prev_year_100"
 IMF_REAL = "imf|NGDP_RPCH"
+#: CPI 交叉验证：NBS 官方（上年=100） vs FRED/OECD（2015=100 指数）
+NBS_CPI = "nbs|cpi|全国居民消费价格指数（上年=100） (%)"
+FRED_CPI = "fred|CHNCPIALLMINMEI"
 
 #: Windows 非法文件名字符（chr(92) 是反斜杠，避免源码里出现字面反斜杠）
 _ILLEGAL_CHARS = '/:*?"<>|' + chr(92)
@@ -249,73 +256,76 @@ def arbitrate_pair(series_a: str, series_b: str, diff_pp: float, diff_source: st
 # cross_check 产物 -> 对比对（形状适配）
 # --------------------------------------------------------------------------- #
 
-def _rows_max_abs(rows: Any, field: str) -> Optional[float]:
-    """rows[].<field> 里所有数值的绝对值最大值（无则 None）。"""
-    vals: list[float] = []
-    if isinstance(rows, list):
-        for r in rows:
-            if isinstance(r, dict) and isinstance(r.get(field), (int, float)):
-                vals.append(abs(float(r[field])))
-    return max(vals) if vals else None
+def _pair_spec(item: dict[str, Any], src: str, label: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    """从 {series_a, series_b, measured} 提取一对；缺字段返回 (None, 原因)。
+
+    这是**数据驱动**的关键：序列键来自产物本身，arbiter 不再按键名猜是哪两条序列。
+    """
+    a = item.get("series_a")
+    b = item.get("series_b")
+    if not isinstance(a, str) or not a.strip() or not isinstance(b, str) or not b.strip():
+        return None, f"{src}: {label} 缺少 series_a / series_b，已跳过"
+    measured = item.get("measured")
+    measured = measured if isinstance(measured, dict) else {}
+    diff = measured.get("diff_pp")
+    diff_type = str(measured.get("diff_type") or "").strip()
+    if not isinstance(diff, (int, float)) or isinstance(diff, bool):
+        # 兼容：measured.max_diff_rate 是比率，按 percent 处理
+        rate = measured.get("max_diff_rate")
+        if isinstance(rate, (int, float)) and not isinstance(rate, bool):
+            diff, diff_type = float(rate), diff_type or "percent"
+        else:
+            return None, f"{src}: {label} 的 measured.diff_pp 不是数字（{diff!r}），已跳过"
+    if diff_type not in ("pp", "percent"):
+        return None, (f"{src}: {label} 的 measured.diff_type={diff_type!r} 非法"
+                      "（应为 pp 或 percent），已跳过")
+    return {"a": a.strip(), "b": b.strip(), "diff": abs(float(diff)),
+            "diff_type": diff_type, "label": label}, None
 
 
 def _adapt(path: Path, obj: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
     """把一个 cross_check JSON 适配成对比对列表；返回 (specs, warnings)。
 
-    spec = {a, b, diff, diff_type, label}。识别不出来的形状不猜，记 warning。
+    **数据驱动**：序列键由产物自带，arbiter 不猜。期望形状::
+
+        {"pairs": [{"series_a": "...", "series_b": "...",
+                    "measured": {"diff_pp": 0.031, "diff_type": "pp", "source": "..."}}]}
+
+    单对时也可以把 series_a / series_b / measured 直接放顶层。measured 里给
+    diff_pp + diff_type（"pp" 或 "percent"）；只给 max_diff_rate 时按 percent 处理。
+    缺 series_a / series_b、差值不是数字、diff_type 非法 —— 一律记 warning 跳过，不猜不崩。
+
+    历史教训（别退回去）：本函数以前是**按文件里的键名**硬编码识别形状的
+    （nbs_vs_imf / registered_vs_imf_pp / max_abs_diff_pp …）。compare-cpi.py 一度
+    因为用了 max_abs_diff_pp 这个键名，被误认成「NBS GDP 指数 × IMF NGDP_RPCH」，
+    产出一条**看起来对、实际错配**的第 7 对。改读 series_a / series_b 之后，
+    形状对不对由产物自己说清楚。
     """
     specs: list[dict[str, Any]] = []
     warnings: list[str] = []
     src = _rel(path)
-    rows = obj.get("rows")
 
-    def add(a: str, b: str, diff: Any, diff_type: str, label: str) -> None:
-        if isinstance(diff, (int, float)):
-            specs.append({"a": a, "b": b, "diff": float(diff),
-                          "diff_type": diff_type, "label": label})
-        else:
-            warnings.append(f"{src}: {label} 的差异值不是数字（{diff!r}），已跳过")
+    pairs = obj.get("pairs")
+    if isinstance(pairs, list):
+        if not pairs:
+            warnings.append(f"{src}: pairs 是空数组，没有可仲裁的对比对")
+        for idx, item in enumerate(pairs, 1):
+            if not isinstance(item, dict):
+                warnings.append(f"{src}: pairs[{idx}] 不是对象，已跳过")
+                continue
+            spec, err = _pair_spec(item, src, f"pairs[{idx}]")
+            if spec:
+                specs.append(spec)
+            elif err:
+                warnings.append(err)
+        return specs, warnings
 
-    # 形状 1: gdp_nbs_vs_worldbank —— result.summary.max_diff_rate
-    result = obj.get("result")
-    summary = result.get("summary") if isinstance(result, dict) else None
-    if isinstance(summary, dict) and "max_diff_rate" in summary:
-        add(GDP_NBS, GDP_WB, summary.get("max_diff_rate"), "percent", "NBS GDP vs World Bank GDP")
-
-    # 形状 2: gdp_3way —— nbs_vs_imf / wb_vs_imf 两条 max_diff_rate
-    for block_key, series_a in (("nbs_vs_imf", GDP_NBS), ("wb_vs_imf", GDP_WB)):
-        block = obj.get(block_key)
-        if isinstance(block, dict) and "max_diff_rate" in block:
-            add(series_a, GDP_IMF, block.get("max_diff_rate"), "percent", block_key)
-
-    # 形状 3: unemployment_3way —— 顶层 *_vs_imf_pp，没有就退到 rows[] 列的最大绝对值
-    for field, series_a in (("registered_vs_imf_pp", UNEMP_REG),
-                            ("surveyed_vs_imf_pp", UNEMP_SUR)):
-        if isinstance(obj.get(field), (int, float)):
-            add(series_a, UNEMP_IMF, obj[field], "pp", field)
-        else:
-            v = _rows_max_abs(rows, field)
-            if v is not None:
-                add(series_a, UNEMP_IMF, v, "pp", field + " (rows max abs)")
-
-    # 形状 4: gdp_real —— max_abs_diff_pp
-    if isinstance(obj.get("max_abs_diff_pp"), (int, float)):
-        add(GDP_INDEX, IMF_REAL, obj["max_abs_diff_pp"], "pp",
-            "NBS GDP index vs IMF NGDP_RPCH")
-
-    # 兜底：顶层任何 *_vs_* 数字都当一对（series 名是占位，交给知识库判不在册）
-    if not specs:
-        for key, value in obj.items():
-            if "_vs_" in key and isinstance(value, (int, float)):
-                a, _, b = key.partition("_vs_")
-                warnings.append(f"{src}: 兜底识别出未知形状的对比对 {key}")
-                add("unknown|" + a, "unknown|" + b, value,
-                    "percent" if "rate" in key else "pp", key)
-
-    if not specs and not warnings:
-        warnings.append(f"{src}: 未识别的 cross_check 形状（顶层键 {sorted(obj)[:8]}），已跳过")
+    spec, err = _pair_spec(obj, src, "顶层")
+    if spec:
+        specs.append(spec)
+    elif err:
+        warnings.append(err)
     return specs, warnings
-
 
 def arbitrate_all(cross_check_dir: Optional[Path] = None) -> list[dict[str, Any]]:
     """扫描 cross_check/*.json，对自动发现的每个对比对调用 arbitrate_pair。
@@ -559,6 +569,7 @@ def _selftest() -> int:
             (UNEMP_REG, UNEMP_IMF): ALIGNED,
             (UNEMP_SUR, UNEMP_IMF): ALIGNED,
             (GDP_INDEX, IMF_REAL): ALIGNED,
+            (NBS_CPI, FRED_CPI): PROFILE_STRICTER,
         }
         if len(pairs) != len(expected_alignment):
             failures.append(f"7: arbiter 记录数期望 {len(expected_alignment)}，实际 {len(pairs)}")
