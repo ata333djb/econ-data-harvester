@@ -17,6 +17,7 @@ data/raw/*
 data/parsed/*
 data/validated/*
 data/processed/*
+data/output/*
 output/*
 !data/**/.gitkeep
 !output/.gitkeep

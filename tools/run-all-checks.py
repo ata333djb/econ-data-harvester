@@ -29,7 +29,9 @@
 10. python tools/compare-gdp-real.py                    （NBS vs IMF 实际增速，无汇率污染）
 11. python tools/compare-unemployment.py               （失业率三方：登记/调查 vs IMF LUR）
 12. python tools/scan-missing.py                       （缺失检测与分类）
-13. python tools/run-fill-strategy.py                  （填补策略执行器：只 leave_null/wait）
+13. python tools/materialize-validated.py              （声明式清单落盘 validated）
+14. python tools/run-fill-strategy.py                  （填补策略执行器：只 leave_null/wait）
+15. python tools/export.py                             （导出 CSV + SQLite + 数据字典）
 
 约定
 ----
@@ -113,9 +115,13 @@ CHECKS: list[Check] = [
     # scan-missing 要跑 NBS 4 次 + WB 2 次 + IMF 2 次 + 默认指标 CPI，也是网络密集型
     # （实测出现过 TimeoutError 重试），与另两项同理放宽到 420s。
     Check("scan-missing", "python", ["tools/scan-missing.py"], timeout_s=420),
-    # run-fill-strategy 复用 scan-missing 的声明式清单（要现取 NBS/WB/IMF 数据），
-    # 同样是网络密集型，故一并给 420s。
+    # materialize-validated 要现取 NBS/WB/IMF 数据后落盘，网络密集型 -> 420s
+    Check("materialize-validated", "python", ["tools/materialize-validated.py"], timeout_s=420),
+    # run-fill-strategy 现已脱网（只读 data/validated/），但按保守策略先保留 420s，
+    # 观察几轮确认稳定后再收回默认值。顺序上必须排在 materialize-validated 之后。
     Check("run-fill-strategy", "python", ["tools/run-fill-strategy.py"], timeout_s=420),
+    # export 只读 data/processed/，不联网，用默认超时
+    Check("export", "python", ["tools/export.py"]),
 ]
 
 # --------------------------------------------------------------------------- #

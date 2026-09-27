@@ -276,10 +276,19 @@ def main() -> int:
                 problems.append(
                     f"{item['label']}: 期望分类含 {item['expect']!r}，实际 {got}")
 
+    # materialize-validated.py 会把声明式清单落盘到 data/validated/，于是同一序列会同时
+    # 出现在"声明式清单"和"落盘扫描"里。docstring 承诺过"已出现的不重复计"，这里兑现它 ——
+    # 否则报告里每条序列都有两份、by_classification 统计翻倍（实测踩过）。
+    declared_keys = {str((it.get("meta") or {}).get("series_key")) for it in declared}
+
     _section(f"[3] data/validated/ 落盘长表扫描（{len(materialized)} 条序列）")
     if not materialized:
         print("  （没有找到带 rows 的长表 JSON）")
     for item in materialized:
+        key = str((item.get("meta") or {}).get("series_key"))
+        if key in declared_keys:
+            print(f"  （跳过 {key}：已由声明式清单覆盖，不重复计）")
+            continue
         res = missing.classify_missing(item["rows"], item["meta"])
         res["label"] = item["label"]
         res["group"] = "materialized"
