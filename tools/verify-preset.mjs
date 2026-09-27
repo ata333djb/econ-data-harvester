@@ -17,6 +17,12 @@ const PROJECT = 'D:/universe/econ-data-harvester'
 const PRESET_DIR = `${PROJECT}/.dsh/.agent-presets/econ-harvester`
 const PRESET_ID = 'econ-harvester'
 
+/**
+ * 宿主内置 preset id。`default` 指向内置 preset 是**合法配置**（例如有意让新会话
+ * 用 standard 打开，而不是一进来就挂本 preset），不是错误，所以断言必须容错它们。
+ */
+const BUILTIN_PRESET_IDS = ['standard', 'minimal', 'code', 'cordis']
+
 const url = (p) => pathToFileURL(p).href
 let failures = 0
 const check = (label, ok, detail = '') => {
@@ -102,10 +108,16 @@ check(
   typeof row?.config?.default === 'string',
   String(row?.config?.default),
 )
+// default 可以是「本 preset 的 id」或「宿主内置 preset」——两者都算指向存在的东西。
+// 唯一要拦住的是拼错的 id（那种情况新会话会以未知 default 启动）。
+const defaultId = row?.config?.default
+const defaultIsBuiltin = BUILTIN_PRESET_IDS.includes(defaultId)
 check(
-  'default names an existing preset id',
-  row?.config?.default === PRESET_ID,
-  `${row?.config?.default} vs dir ${PRESET_ID}`,
+  'default 指向存在的 preset id，或者是内置 preset (standard / minimal / code / cordis)',
+  defaultId === PRESET_ID || defaultIsBuiltin,
+  defaultIsBuiltin
+    ? `${String(defaultId)}（内置 preset）`
+    : `${String(defaultId)} vs dir ${PRESET_ID}`,
 )
 const root = row?.config?.roots?.[0]
 check('declares one preset root', root !== undefined)

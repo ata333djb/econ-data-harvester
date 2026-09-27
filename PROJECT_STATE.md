@@ -132,6 +132,7 @@
 - **接 BIS 的理由是加工而非采集**：BIS 对长序列做了**拼接 + 重定基**，是本项目第一条真正需要拼接的链外序列
 - 门禁 21 -> **22/22**（新增第 5 项 smoke-bis-adapter；另在 check-cli-envelope 补了 2 条 BIS 用例，只加不改）
 - **发现 `http_client` 漏解压小写 `content-encoding: gzip`**（§3.13），本轮在 `bis_client` 就地绕开、未修 http_client
+- **修好了 `verify-preset.mjs` 的 default 断言**（原断言要求 `default` 必须等于本 preset 的目录 id，于是 `default: standard` 被判 FAIL）。现改为「等于本 preset id **或** 是内置 preset（standard / minimal / code / cordis）」，理由是 `default: standard` 是**有意配置**（避免新会话打不开），不是错误。修后 `ALL CHECKS PASSED`（exit 0）。**注意 `verify-preset.mjs` 不在门禁 22 项里**，需要手工跑
 - **本轮刻意不做**：拼接器与拼接断点检查（下一轮）、把 BIS 接进声明式清单与导出链路
 
 ### 1.5 上一轮新增（arbiter 改成数据驱动）
@@ -231,6 +232,14 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 - **每个对比产物必须自带 `series_a` / `series_b` / `measured`**（多对用 `pairs` 数组）；`measured` 里给 `diff_pp` + `diff_type`（"pp" 或 "percent"）+ `source`。缺字段的产物 arbiter 只记 warning 跳过
 - **arbiter 不猜序列对**：形状由产物自己声明（见 5.4 的错配事故）
+
+### 2.12 各源的 URL / 传输层固定约束（写死在 client 里，别顺手改）
+
+上面 2.2 管的是**出口契约**，这一节管**入口**（怎么把上游取回来）。每条都是实测踩出来的：
+
+- **境外源先试朴素 UA**（`python-urllib/3.12`）：IMF 的 Akamai 与 FRED 都会 403 / 掐断 Chrome UA（§3.2）。BIS 不挑 UA，但沿用朴素 UA 保持一致
+- **BIS SDMX 只用 `format=sdmx-json`**：`?format=jsondata` 恒 **406** `Unsupported format: jsondata`。密钥必须给满三位 `FREQ.REF_AREA.UNIT_MEASURE`（如 `M.CN.771`），少一位返回 404。`UNIT_MEASURE`：`771`=同比 %、`628`=指数（2010=100）。（OECD SDMX 的 `format` 白名单**完全不同**，见 §3.12 —— 两家的值不可互抄）
+- **`http_client` 的 `Content-Encoding` 查找大小写敏感**：服务器回小写头名（BIS 就是）时**不会解压**，gzip 字节会被当 JSON 解析而崩。当前绕法在 `bis_client._decode_body`（按 gzip magic 判断），**新源如果也返回压缩就别假设 http_client 处理好了** —— 详见 §3.13
 
 ---
 
@@ -508,11 +517,12 @@ NBS / World Bank / IMF / FRED 四个源目前都没踩到 —— 它们的响应
 
 ### 5.3 方向 D 与之后的待办
 
-- **方向 D 已完成四轮**：① HTML 报告 ② 血缘 + 真实门禁状态 ③ 修 export alias 重复 ④ 图表内联（报告自包含，断网可看）；后续可选导出 PDF / 挂 CI（CI 用 `report.py --test --offline`，冷检出要先预热缓存）。**方向 A 第四轮（可选）**：拼接断点检查 / PROV-JSON —— 系统至今**从未真正拼接**过序列，等真出现拼接再做
+- **方向 D 已完成四轮**：① HTML 报告 ② 血缘 + 真实门禁状态 ③ 修 export alias 重复 ④ 图表内联（报告自包含，断网可看）；后续可选导出 PDF / 挂 CI（CI 用 `report.py --test --offline`，冷检出要先预热缓存）。原本挂在方向 A 第四轮下的**拼接断点检查已并入方向 C 第四轮**（那里才有真场景）
 - **方向 C 第一轮：FRED CPI —— 已完成**：NBS「上年=100」vs FRED/OECD 10 年全部落「一致」档（最大 0.081 pp）。但 FRED 的原始数据来自 NBS（OECD 转述），**一致性只证明转述无误**
 - **方向 C 第二轮「加独立源验证 CPI」—— 已探测，结论：不可达**。四个候选（BIS / OECD / PWT 11.0 / Maddison 2023）**全部不是独立编制**，见 §3.10 与 `python/_probes/README.md`。**不要重开这个方向**：问题不在「还没找到源」，在于中国的价格采集只有 NBS 一个执行者
-- **方向 C 第三轮：接 BIS —— 已完成**（bis_client + CLI + adapter + 知识库，门禁 22/22）。理由是**序列长度与拼接实现**，不是独立性：BIS 提供 1995-01 起的月度中国 CPI（现有序列 2015 起，扩 20 年），且 BIS 自己对转载序列做了拼接（joining consecutive periods）+ 重定基（2010=100），是本项目里第一条**真正需要拼接**的链外序列
-- **拼接器 + 拼接断点检查 —— 下一轮**（原本挂在「方向 A 第四轮」下，现在有真场景了）。本轮**刻意不写**：`bis_client` 只落盘、不拼接
+- **方向 C 第三轮：接 BIS —— 已完成**（bis_client + CLI + adapter + 知识库 + smoke，门禁 22/22）。理由是**序列长度与拼接实现**，不是独立性：BIS 提供 1995-01 起的月度中国 CPI（现有序列 2015 起，扩 20 年），且 BIS 自己对转载序列做了拼接（joining consecutive periods）+ 重定基（2010=100），是本项目里第一条**真正需要拼接**的链外序列
+- **方向 C 第四轮（下一步）：BIS 接声明式清单 + 拼接器 + 拼接断点检查**。三件事同一轮做，因为它们是同一条链：① 把 `bis|WS_LONG_CPI|M.CN.628`（或 771）写进 `tools/scan-missing.py` 的声明式清单，让 BIS 走到 validated / processed / 导出；② 写拼接器（当前系统从未真正拼接）；③ 激活一直空转的拼接断点检查。**真场景已就位**：BIS 的 628 起点 1995-01、771 起点 1996-01，两者差 12 期，正好是拼接逻辑要处理的第一个真实台阶
+- **修 `http_client._decompress` 的大小写缺陷（建议与 C 第四轮同轮）**。见 §3.13；修完 `bis_client._decode_body` 可简化，但建议**保留 gzip magic 兜底**（那是「不信任服务器声明」的一层）
 - **ICP 2021 方向：单独立项（真正独立的价格水平数据）**。CPI 维度已证不可达（§3.10），但**价格水平**维度的独立测量是存在的：世界银行 ICP 是各经济体**自己采集**一篮子代表品，2021 轮中国**参加了**（NBS 2024-05 自行发布过 2021 轮 ICP 结果）。可用它验 PWT 的 `pl_gdpo` 或 OECD `DF_TABLE4` 的中国 PPP —— 一方是中国官方采集、一方是多边化处理，这才是真交叉验证。立项前要先解决 §3.11 的 TLS 证书链（PWT 侧）
 - **方向 B（已暂停，需单独立项）**：桌面版装配链路。实测本会话真正生效的是 .dsh/econ-harvester.patch.yml 的 global insert，不是 preset 的 persona；共有三层注册机制、两份 preset 副本
 - **落地插值**：当前 true_gap = 0 例，所以插值实现故意留空（出现 interpolate 会抛 NotImplementedError）。等真遇到上游序列中断再实现，并同步补回归
@@ -542,7 +552,7 @@ NBS / World Bank / IMF / FRED 四个源目前都没踩到 —— 它们的响应
 | smoke-imf-adapter.mjs | IMF 插件冒烟 |
 | smoke-fred-adapter.mjs | FRED 插件冒烟（含 start/end 可选参数的 argv 拼装） |
 | smoke-bis-adapter.mjs | BIS 插件冒烟（三参数全可选 + key 原样透传 + 两个必填缺失路径） |
-| verify-preset.mjs | preset 装配校验（不起 DSH 服务）：ESM 加载、cordis 激活/卸载、YAML 形状、相对路径解析 |
+| verify-preset.mjs | preset 装配校验（不起 DSH 服务）：ESM 加载、cordis 激活/卸载、YAML 形状、相对路径解析；**不在门禁里，要手工跑**。default 断言容错内置 preset |
 | compare-gdp.py | NBS vs World Bank 中国 GDP（首个交叉验证，结论：逐位相同） |
 | compare-gdp-3way.py | NBS vs WB vs IMF 三方（统一到亿美元；汇率取 WB PA.NUS.FCRF） |
 | compare-gdp-real.py | NBS GDP 指数 vs IMF NGDP_RPCH 实际增速（无汇率污染口径） |
