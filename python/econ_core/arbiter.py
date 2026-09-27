@@ -38,7 +38,8 @@ arbiter 把两者配成一条记录，给出四值判定：
 两条容易误读的约定
 ------------------
 * verdict 来自口径画像（comparable），attribution / recommended_action 来自实测归因
-  （explain_divergence）。两者是独立的两句话，本模块不强行让它们一致；
+  （explain_divergence）。两者是独立的两句话，本模块不强行让它们一致，但用
+  alignment 字段把这种张力显式记下来：aligned / profile_stricter / measured_stricter；
   当 verdict=人工复核 时，explanation 会显式声明「归因仅供参考」。
 * diff_type=percent 时 measured.diff_pp 里装的是**比率**（0.0114 就是 1.14%），
   只有 diff_type=pp 才真的是百分点。字段名沿用调用方约定，语义看 diff_type。
@@ -75,6 +76,11 @@ __all__ = [
     "DEFAULT_OUT_DIR",
     "VERDICT_BY_COMPARABLE",
     "VERDICT_MANUAL",
+    "safe_stem",
+    "pair_report_path",
+    "ALIGNED",
+    "PROFILE_STRICTER",
+    "MEASURED_STRICTER",
     "HIGH_IMPACT_FIELDS",
 ]
 
@@ -94,6 +100,33 @@ VERDICT_BY_COMPARABLE: dict[str, str] = {
     "low": VERDICT_SEPARATE,
     "incompatible": VERDICT_SEPARATE,
 }
+
+#: alignment —— verdict（画像侧）与 recommended_action（实测侧）是否同调。
+#: 做法是把两侧都折算成「严格程度」序数再比大小：
+#:   aligned           两边一样严（如 registered × imf|LUR 都判「不可拼接」）
+#:   profile_stricter  画像更严（如 gdp × imf|NGDPD 画像=可桥接，实测=noise/splice）
+#:   measured_stricter 实测更严
+ALIGNED = "aligned"
+PROFILE_STRICTER = "profile_stricter"
+MEASURED_STRICTER = "measured_stricter"
+
+#: 严格程度序数。「人工复核」与「不可拼接」同级——都是最保守的结论。
+_VERDICT_STRICTNESS: dict[str, int] = {
+    VERDICT_SAME: 0, VERDICT_BRIDGE: 1, VERDICT_SEPARATE: 2, VERDICT_MANUAL: 2,
+}
+_ACTION_STRICTNESS: dict[str, int] = {"splice": 0, "bridge": 1, "keep_separate": 2}
+
+
+def _alignment(verdict: str, action: str) -> str:
+    """比较画像判定与实测归因的严格程度。
+
+    认不出的取值一律按最保守（2）处理，不猜。
+    """
+    v = _VERDICT_STRICTNESS.get(verdict, 2)
+    a = _ACTION_STRICTNESS.get(action, 2)
+    if v == a:
+        return ALIGNED
+    return PROFILE_STRICTER if v > a else MEASURED_STRICTER
 
 #: 高影响字段：这些字段 unknown 时判定权交给人工。
 #: 取值与 source_profiler._COMPARE_FIELDS 里 impact == "high" 的集合一致，
@@ -136,7 +169,7 @@ def _rel(p: Path) -> str:
     return rel.as_posix()
 
 
-def _safe_stem(text: str) -> str:
+def safe_stem(text: str) -> str:
     """pair_key -> 文件名。保留非 ASCII，只替换路径非法字符。"""
     out = text.replace(" × ", "__vs__")
     out = "".join(("_" if ch in _ILLEGAL_CHARS else ch) for ch in out)
@@ -180,6 +213,7 @@ def arbitrate_pair(series_a: str, series_b: str, diff_pp: float, diff_source: st
 
     div = source_profiler.explain_divergence(series_a, series_b, measured)
     explanation = str(div.get("explanation") or "")
+    action = str(div.get("recommended_action") or "keep_separate")
     if verdict == VERDICT_MANUAL:
         explanation = ("知识库缺口（" + "、".join(high_unknowns)
                        + "）——判定降级为人工复核；下面的归因仅供参考：" + explanation)
@@ -204,7 +238,8 @@ def arbitrate_pair(series_a: str, series_b: str, diff_pp: float, diff_source: st
         },
         "attribution": str(div.get("attribution") or "unknown"),
         "explanation": explanation,
-        "recommended_action": str(div.get("recommended_action") or "keep_separate"),
+        "recommended_action": action,
+        "alignment": _alignment(verdict, action),
         "confidence": str(div.get("confidence") or "low"),
         "arbitrated_at": _utc_now(),
     }
@@ -323,6 +358,12 @@ def arbitrate_all(cross_check_dir: Optional[Path] = None) -> list[dict[str, Any]
     return pairs
 
 
+def pair_report_path(pair_key: str, out_dir: Optional[Path] = None) -> Path:
+    """pair_key -> 该类判定报告的文件路径（与 write_arbiter_report 的命名一致）。"""
+    out = Path(out_dir) if out_dir else DEFAULT_OUT_DIR
+    return out / (safe_stem(pair_key) + ".json")
+
+
 def write_arbiter_report(out_dir: Optional[Path] = None) -> Path:
     """跑 arbitrate_all 并落盘：每个对比对一个 JSON + 一个 _index.json。
 
@@ -338,7 +379,7 @@ def write_arbiter_report(out_dir: Optional[Path] = None) -> Path:
     for rec in pairs:
         verdict = rec["verdict"]
         index["by_verdict"][verdict] = index["by_verdict"].get(verdict, 0) + 1
-        fname = _safe_stem(rec["pair_key"]) + ".json"
+        fname = safe_stem(rec["pair_key"]) + ".json"
         fp = out / fname
         fp.write_text(json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
         index["pairs"].append({
@@ -377,6 +418,7 @@ def _brief(rec: dict[str, Any]) -> dict[str, Any]:
         "comparable": rec["comparable"],
         "attribution": rec["attribution"],
         "recommended_action": rec["recommended_action"],
+        "alignment": rec["alignment"],
         "confidence": rec["confidence"],
         "unknown_fields": rec["unknown_fields"],
         "high_impact_unknowns": rec["high_impact_unknowns"],
@@ -430,6 +472,8 @@ def _selftest() -> int:
         failures.append(f"1: comparable 期望 low，实际 {r1['comparable']}")
     if r1["recommended_action"] != "keep_separate":
         failures.append(f"1: recommended_action 期望 keep_separate，实际 {r1['recommended_action']}")
+    if r1["alignment"] != ALIGNED:
+        failures.append(f"1: alignment 期望 {ALIGNED}（画像与实测都判不可拼），实际 {r1['alignment']}")
 
     # 2) 调查失业率 vs IMF LUR —— 同口径
     r2 = arbitrate_pair(UNEMP_SUR, UNEMP_IMF, 0.02, FAKE_SOURCE)
@@ -438,12 +482,16 @@ def _selftest() -> int:
         failures.append(f"2: verdict 期望 {VERDICT_SAME}，实际 {r2['verdict']}")
     if r2["recommended_action"] != "splice":
         failures.append(f"2: recommended_action 期望 splice，实际 {r2['recommended_action']}")
+    if r2["alignment"] != ALIGNED:
+        failures.append(f"2: alignment 期望 {ALIGNED}，实际 {r2['alignment']}")
 
     # 3) NBS GDP vs World Bank GDP —— 同源复述，差异是浮点噪声
     r3 = arbitrate_pair(GDP_NBS, GDP_WB, 0.0, FAKE_SOURCE, "percent")
     _show(f"[3] arbitrate_pair({GDP_NBS!r}, {GDP_WB!r}, 0.0, percent)", _brief(r3))
     if r3["verdict"] != VERDICT_SAME:
         failures.append(f"3: verdict 期望 {VERDICT_SAME}，实际 {r3['verdict']}")
+    if r3["alignment"] != ALIGNED:
+        failures.append(f"3: alignment 期望 {ALIGNED}，实际 {r3['alignment']}")
 
     # 4) NBS GDP vs IMF NGDPD —— 现价美元换算，可桥接
     r4 = arbitrate_pair(GDP_NBS, GDP_IMF, 0.0114, FAKE_SOURCE, "percent")
@@ -452,6 +500,8 @@ def _selftest() -> int:
         failures.append(f"4: verdict 期望 {VERDICT_BRIDGE}，实际 {r4['verdict']}")
     if r4["comparable"] != "medium":
         failures.append(f"4: comparable 期望 medium，实际 {r4['comparable']}")
+    if r4["alignment"] != PROFILE_STRICTER:
+        failures.append(f"4: alignment 期望 {PROFILE_STRICTER}（画像=可桥接，实测=splice），实际 {r4['alignment']}")
 
     # 5) unknown_fields 命中高影响字段 -> 人工复核（优先级最高）
     base5 = source_profiler.compare_profiles(GDP_NBS, GDP_WB)
@@ -466,6 +516,8 @@ def _selftest() -> int:
         failures.append(f"5: knowledge_gaps 应为空，实际 {r5['knowledge_gaps']}")
     if "人工复核" not in r5["explanation"]:
         failures.append("5: explanation 未声明降级为人工复核")
+    if r5["alignment"] != PROFILE_STRICTER:
+        failures.append(f"5: alignment 期望 {PROFILE_STRICTER}（人工复核 严于 splice），实际 {r5['alignment']}")
 
     # 6) unknown_fields 只命中低影响字段 -> 保留原判定，记 knowledge_gaps
     r6 = _with_fake_compare(base5, ["start_year"],
@@ -477,6 +529,8 @@ def _selftest() -> int:
         failures.append(f"6: knowledge_gaps 期望 [start_year]，实际 {r6['knowledge_gaps']}")
     if r6["high_impact_unknowns"]:
         failures.append(f"6: high_impact_unknowns 应为空，实际 {r6['high_impact_unknowns']}")
+    if r6["alignment"] != r3["alignment"]:
+        failures.append(f"6: alignment 应与场景 3 相同，实际 {r6['alignment']}")
 
     # 7) arbitrate_all：扫 cross_check 目录，不崩
     files = sorted(CROSS_CHECK_DIR.glob("*.json"))
@@ -491,12 +545,30 @@ def _selftest() -> int:
         pairs = []
         failures.append(f"7: arbitrate_all 抛异常 {type(exc).__name__}: {exc}")
     for rec in pairs:
-        print(f"      {rec['verdict']:<6} {rec['pair_key']}"
+        print(f"      {rec['verdict']:<6} {rec['alignment']:<17} {rec['pair_key']}"
               f"  (diff={rec['measured']['diff_pp']:.6g} {rec['measured']['diff_type']})")
     if len(files) < 3:
-        failures.append(f"7: cross_check 文件数期望 >=3，实际 {len(files)}")
-    if len(pairs) < 3:
-        failures.append(f"7: arbiter 记录数期望 >=3，实际 {len(pairs)}")
+        # 干净检出时 cross_check 还没生成（门禁里 arbiter --test 排在 compare-*.py 之前），
+        # 这时跳过实数据断言，只保留「不崩」这一条。
+        print(f"      [skip] cross_check 产物只有 {len(files)} 个（先跑 tools/compare-*.py 才有），本场景跳过实数据断言")
+    else:
+        expected_alignment = {
+            (GDP_NBS, GDP_IMF): PROFILE_STRICTER,
+            (GDP_WB, GDP_IMF): PROFILE_STRICTER,
+            (GDP_NBS, GDP_WB): ALIGNED,
+            (UNEMP_REG, UNEMP_IMF): ALIGNED,
+            (UNEMP_SUR, UNEMP_IMF): ALIGNED,
+            (GDP_INDEX, IMF_REAL): ALIGNED,
+        }
+        if len(pairs) != len(expected_alignment):
+            failures.append(f"7: arbiter 记录数期望 {len(expected_alignment)}，实际 {len(pairs)}")
+        seen = {(r["series_a"], r["series_b"]): r["alignment"] for r in pairs}
+        for pair, want in expected_alignment.items():
+            got = seen.get(pair)
+            if got is None:
+                failures.append(f"7: 缺少对比对 {pair[0]} × {pair[1]}")
+            elif got != want:
+                failures.append(f"7: {pair[0]} × {pair[1]} alignment 期望 {want}，实际 {got}")
     warns = last_warnings()
     print(f"      warnings: {len(warns)}")
     for w in warns:

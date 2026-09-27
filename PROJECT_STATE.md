@@ -6,7 +6,7 @@
 
 权威性顺序（冲突时以序号小的为准）：
 
-1. 门禁 tools/run-all-checks.py 的**实际输出**（当前应为 17/17 PASS）——这是唯一硬标准
+1. 门禁 tools/run-all-checks.py 的**实际输出**（当前应为 18/18 PASS）——这是唯一硬标准
 2. 本文件
 3. 各模块 docstring —— 细节、实测证据、踩坑经过都写在那里
 
@@ -44,7 +44,8 @@
 - python/econ_core/fill_strategy.py —— 填补策略执行器：把决策写成行级元数据，**当前不执行任何插值**（出现 interpolate 直接抛 NotImplementedError）
 - python/econ_core/source_profiler.py —— 来源画像：profile_series / compare_profiles / explain_divergence（**本轮新增**）
 - python/econ_core/source_profiles.yaml —— **人工编纂**的来源画像知识库：3 个发布机构 + 10 条指标口径 + 18 个字段语义 + 口径家族表
-- python/econ_core/arbiter.py —— 口径判定仲裁：把「画像判定」与「实测差异（读 cross_check 产物）」配成一条记录，给出 同口径 / 可桥接 / 不可拼接 / 人工复核 四值判定（**本轮新增**）
+- python/econ_core/arbiter.py —— 口径判定仲裁：把「画像判定」与「实测差异（读 cross_check 产物）」配成一条记录，给出 同口径 / 可桥接 / 不可拼接 / 人工复核 四值判定 + alignment（画像与实测是否同调）
+- python/econ_core/credibility.py —— 五维可信度评分（Expertise 0.25 / Provenance 0.20 / Timeliness 0.10 / Transparency 0.15 / Coherence 0.30）-> 0-100 分 + high/medium/low（**本轮新增**）
 
 **输出层**
 
@@ -56,7 +57,7 @@
 - python/_probes/README.md —— 逆向探测脚本索引与已知观察（NBS 接口考古、缓存键缺陷等）
 - PROJECT_STATE.md —— 本文件
 
-### 1.2 门禁：17 项（tools/run-all-checks.py，当前 17/17 PASS）
+### 1.2 门禁：18 项（tools/run-all-checks.py，当前 18/18 PASS）
 
 | # | 检查 | 类型 | 说明 |
 |---|---|---|---|
@@ -76,9 +77,10 @@
 | 14 | scan-missing | python | 缺失检测与分类扫描，产出 data/validated/missing_report.json；timeout 420s |
 | 15 | materialize-validated | python | 声明式清单落盘 data/validated/；timeout 420s |
 | 16 | run-fill-strategy | python | validated → processed（零填充，**已脱网**，约 0.4s） |
-| 17 | export | python | processed → CSV / SQLite / 数据字典（纯离线） |
+| 17 | credibility --test | python | 可信度评分自检，5 个场景（纯离线，约 0.6s） |
+| 18 | export | python | processed → CSV / SQLite / 数据字典（纯离线） |
 
-门禁的运行顺序**有依赖**：materialize-validated（15）必须在 run-fill-strategy（16）之前（后者读前者落盘的文件）；export（17）最后。check-cli-envelope 与三个 compare 脚本是网络密集型，超时放宽到 420s。
+门禁的运行顺序**有依赖**：materialize-validated（15）-> run-fill-strategy（16）-> credibility（17）-> export（18）最后。credibility 读 validated + processed + cross_check 三样产物，所以不能挪到 arbiter 旁边（干净检出时会误报）。check-cli-envelope 与三个 compare 脚本是网络密集型，超时放宽到 420s。
 
 ### 1.3 当前数据规模
 
@@ -89,6 +91,7 @@
 - **缺失动作（按行统计）**：leave_null 8 / wait 2 / interpolate 0
 - **row_sha16 覆盖率**：152/152（全部唯一）
 - 落盘位置：data/validated/（9 个长表 JSON + missing_report.json）→ data/processed/（10 个带缺失元数据的 JSON）→ data/output/（CSV + SQLite + 字典）
+- 知识库另有 **2 条只用于对比、未落盘**的序列（nbs|gdp|index_prev_year_100、imf|NGDP_RPCH），所以知识库规范键 11 条 > 落盘序列 9 条
 
 10 个 series_key（9 条声明式序列 + 1 条别名键；知识库必须与之一一对应）：
 
@@ -103,12 +106,13 @@
 9. imf|LUR（起点 2017）
 10. NBS|000000000000|db8e5a86c08246e79b1b11251927e740（**别名**，指向第 1 条）
 
-### 1.4 最近一轮新增（方向 A 第二轮：口径判定 Arbiter）
+### 1.4 最近一轮新增（方向 A 第三轮：可信度评分）
 
-- python/econ_core/arbiter.py —— arbitrate_pair / arbitrate_all / write_arbiter_report + 7 场景自检
-- data/validated/arbiter/ —— 5 对判定 + _index.json（本轮新增产出目录）
-- tools/run-all-checks.py —— 门禁从 16 项加到 17 项
-- 上一轮（来源画像）：source_profiles.yaml 知识库 + source_profiler.py；venv 新装 PyYAML 6.0.3
+- python/econ_core/credibility.py —— score_series / score_all / write_credibility_report + 5 场景自检
+- python/econ_core/arbiter.py —— 加 alignment 字段（aligned / profile_stricter / measured_stricter）
+- source_profiles.yaml —— 补两条**只用于对比、未落盘**的序列，arbiter 从 5 对变 6 对（gdp_real 那对现在判同口径）
+- data/validated/{arbiter,credibility}/ —— 口径判定报告 + 可信度评分报告（本轮新增产出目录）
+- tools/run-all-checks.py —— 门禁从 17 项加到 18 项
 
 ---
 
@@ -327,7 +331,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
                                                                                 v
                                           (下一轮) Arbiter: 同口径 / 可桥接 / 不可拼接
 
-    横切: tools/run-all-checks.py —— 17 项门禁，任何改动后必跑
+    横切: tools/run-all-checks.py —— 18 项门禁，任何改动后必跑
 
 ### 4.2 每层职责与产物
 
@@ -358,32 +362,31 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 ## 5. 下一步待办
 
-### 5.1 方向 A 第二轮：口径判定 Arbiter —— 已完成（本轮）
+### 5.1 方向 A 第二轮：口径判定 Arbiter —— 已完成
 
-- 产出：python/econ_core/arbiter.py；判定报告落盘 data/validated/arbiter/（5 对 + _index.json）
+- 产出：python/econ_core/arbiter.py + 判定报告落盘 data/validated/arbiter/（**6 对** + _index.json）
 - 实测差异**不重跑取数**，直接读 data/validated/cross_check/*.json；可识别 4 种形状，认不出就跳过记 warning
-- 判定优先级：高影响 unknown（statistical_method / coverage / population_scope）-> 人工复核；低影响 unknown -> 保留原判定并记 knowledge_gaps
-- 本轮结果：可桥接 2 / 同口径 2 / 不可拼接 1；gdp_real 那对的两个序列不在知识库，已跳过（warning）
-- 遗留：verdict 取自画像、recommended_action 取自实测归因，二者可能不同调（见 5.4）
+- 判定优先级：高影响 unknown（statistical_method / coverage / population_scope）-> 人工复核；低影响 unknown -> 保留原判定并记 knowledge_gaps；alignment 记画像与实测是否同调（见 5.4）
 
-### 5.2 方向 A 第三轮：可信度评分（下一个要做的事）
+### 5.2 方向 A 第三轮：可信度评分 —— 已完成
 
-- 三个维度：Expertise（专业能力）/ Coherence（自洽性）/ Goodwill（善意与可追溯性）
-- 数据基础：source_profiles.yaml 的 authority_level / license / revision_policy，以及 row_sha16 加 raw_cache 构成的证据链
-- 消费方：先拿 arbiter 的 verdict 定口径，再给数字打可信度分（口径没判清的数字不打分）
+- 产出：python/econ_core/credibility.py + 报告落盘 data/validated/credibility/（11 条 + _index.json）
+- 五维加权：Expertise 0.25 / Provenance 0.20 / Timeliness 0.10 / Transparency 0.15 / Coherence 0.30 -> 0-100 分 + high/medium/low
+- 当前分布：8 high / 3 medium / 0 low；最高 nbs|surveyed_unemployment 95.5，最低 imf|NGDP_RPCH 77.25
+- 两条只用于对比、未落盘的序列（nbs|gdp|index_prev_year_100、imf|NGDP_RPCH）provenance 只有 30（没有 series_file）
 
-### 5.3 之后（优先级待定）
+### 5.3 方向 A 第四轮（可选）与之后
 
+- **方向 A 第四轮（可选）**：拼接断点检查 / PROV-JSON 溯源导出 / HTML 报告 —— 都还没开始，优先级待定
 - **产品化**：桌面版 preset（家目录已同步三套 adapter，需要确认桌面版实际加载的是哪一份）
 - **加源**：OECD / BIS / FRED。每加一条序列**必须补知识库条目**，否则 profiler 抛 KeyError
-- **HTML 报告**：把 processed + 画像 + 可比性渲染成人类可读报告（当前是 CSV / SQLite / Markdown 三件套）
 - **落地插值**：当前 true_gap = 0 例，所以插值实现故意留空（出现 interpolate 会抛 NotImplementedError）。等真遇到上游序列中断再实现，并同步补回归
 
 ### 5.4 已知的小尾巴
 
 - aggregated_from_months 只存在于 validated / processed 的 JSON 层，**不在 CSV / SQLite 里**（输出层 14 列是定案集合，export.py 未改）。要它可见就追加为第 15 列，或折进 missing_evidence
 - compare-gdp-3way 的 timeout 已放宽到 420s，但实测波动大（16.5s -> 85.1s），若再变慢要考虑拆项
-- arbiter 的 verdict 与 recommended_action 可能不同调：gdp × imf|NGDPD 判「可桥接」（medium），但 explain_divergence 因差异小于 0.1 判 noise -> splice。两个字段各自独立，暂不强行统一
+- arbiter 的 verdict 与 recommended_action 可能不同调（gdp × imf|NGDPD：画像=可桥接，实测=noise/splice）。两个字段各自独立、不强行统一，但已用 alignment=profile_stricter 显式记录；要真正统一得改 source_profiler 的归因规则
 
 ---
 
@@ -397,7 +400,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 | 文件 | 一句话职责 |
 |---|---|
-| run-all-checks.py | 门禁总入口：顺序跑 17 项检查，失败即停；支持逐检查 timeout 覆盖 |
+| run-all-checks.py | 门禁总入口：顺序跑 18 项检查，失败即停；支持逐检查 timeout 覆盖 |
 | check-cli-envelope.py | 契约测试：真跑 10 个子命令（11 用例），按 R1-R11 校验 stdout 信封；超时 420s |
 | smoke-nbs-adapter.mjs | NBS 插件冒烟：桩替换 execFile，验证 argv 与必填校验 |
 | smoke-worldbank-adapter.mjs | World Bank 插件冒烟（含 wantArgv 精确比对） |
@@ -440,6 +443,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 | data/parsed/{nbs,worldbank,imf}/ | 按请求指纹的解析结果 |
 | data/validated/{nbs,worldbank,imf}/ | 长表（9 条声明式序列），materialize-validated 的产物 |
 | data/validated/missing_report.json | 缺失分类总报告（scan-missing 产物） |
+| data/validated/{arbiter,credibility}/ | 口径判定报告（6 对）/ 可信度评分报告（11 条） |
 | data/validated/cross_check/ | 三个对比脚本的结果 JSON |
 | data/processed/{nbs,worldbank,imf}/ | 带缺失元数据的行（10 个文件） |
 | data/output/ | 产品：econ_data.csv / econ_data.db / data_dictionary.md |
@@ -466,15 +470,15 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
        cd D:\universe\econ-data-harvester
        .\.venv\Scripts\python.exe tools\run-all-checks.py
 
-   期望 17/17 PASS，exit 0。若不是 17/17，先定位是哪一项退化了，不要继续叠加改动。
+   期望 18/18 PASS，exit 0。若不是 18/18，先定位是哪一项退化了，不要继续叠加改动。
 4. 报告状态：门禁结果、git status、当前数据规模（9 条声明式序列 / 152 行 / 10 缺失行），然后停下等指令
 
 ### 7.1 报告模板（建议照抄）
 
-    门禁：17/17 PASS（exit 0）
+    门禁：18/18 PASS（exit 0）
     working tree：<git status --short 的内容>
     数据：9 条声明式序列 / 152 行 / 10 缺失行（按行：series_start 5, discontinued 3, not_yet_published 2, true_gap 0）
-    下一步待办：方向 A 第三轮「可信度评分」
+    下一步待办：方向 A 第四轮（可选）「拼接断点检查 / PROV-JSON / HTML 报告」
 
 ### 7.2 开工前的三条自检
 
@@ -484,7 +488,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 ### 7.3 改动后的固定动作
 
-1. 跑完整门禁，确认仍 17/17（新增检查要同步加进 CHECKS 与 docstring 编号）
+1. 跑完整门禁，确认仍 18/18（新增检查要同步加进 CHECKS 与 docstring 编号）
 2. 新增序列 -> 补 source_profiles.yaml 条目（否则 profiler 抛 KeyError）
 3. 改契约/分类/字段名 -> 同步更新本文件的第 2 节与第 3 节
 4. 不要把 data/ 下的产物提交进 git（它们已被忽略）；不要把 raw 存档删掉（那是证据链）

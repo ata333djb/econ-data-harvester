@@ -246,6 +246,43 @@ indicators:
     references:
       - https://www.imf.org/en/Publications/WEO
 
+  "nbs|gdp|index_prev_year_100":
+    display_name: "国内生产总值指数（上年=100）"
+    definition: "按不变价格计算的国内生产总值指数，以上年为 100；剔除价格因素后反映实际经济总量的变动幅度。"
+    statistical_method: "国民经济核算（汇总汇编）"
+    collecting_agency: "国家统计局"
+    coverage: "中国大陆"
+    population_scope: "经济活动总量（非人口口径）"
+    unit: "指数（上年=100）"
+    frequency: annual
+    start_year: unknown
+    discontinued_after: null
+    revision_policy: unknown
+    source_notes: "**实测与 IMF NGDP_RPCH 的实际增速逐年完全一致（10/10 年差 0.00 pp）**——把它转成增速（指数 - 100）即等于 IMF 的实际 GDP 增速。这是**无汇率污染**的口径对照，见 tools/compare-gdp-real.py。start_year / revision_policy 未找到明确的官方依据，故记 unknown。"
+    comparability:
+      "with_imf|NGDP_RPCH": high
+    references:
+      - https://data.stats.gov.cn/
+
+  "imf|NGDP_RPCH":
+    display_name: "Real GDP growth（实际 GDP 增速，年 %）"
+    definition: "Gross domestic product is the most commonly used single measure of a country's overall economic activity. It represents the total value at constant prices of final goods and services produced within a country during a specified time period, such as one year.（IMF DataMapper /v1/indicators 返回的 description 原文）"
+    statistical_method: "汇总汇编（IMF 基于各国官方实际增速做国际可比性协调）"
+    collecting_agency: "中国国家统计局（原始核算）；IMF WEO 团队做国际可比性协调"
+    coverage: "中国大陆"
+    population_scope: "经济活动总量（非人口口径）"
+    unit: "%"
+    frequency: annual
+    start_year: unknown
+    discontinued_after: null
+    revision_policy: "同 WEO：每年 4 月 / 10 月重算并回溯修订历史值，含未来预测"
+    source_notes: "API 原始 unit 是 Annual percent change（知识库按本项目口径记 %）。**实测与 NBS 国内生产总值指数（上年=100）的实际增速逐年完全一致（0.00 pp）**——说明 IMF 的中国实际增速就是 NBS 不变价核算结果。"
+    comparability:
+      "with_nbs|gdp|index_prev_year_100": high
+    references:
+      - https://www.imf.org/en/Publications/WEO
+      - https://www.imf.org/external/datamapper/api/v1/indicators
+
   "NBS|000000000000|db8e5a86c08246e79b1b11251927e740":
     alias_of: "nbs|gdp|cny_100m"
     source_notes: "这是 normalize 自动推导出来的 series_key（source|region_code|indicator_id 的大写形式），与 nbs|gdp|cny_100m 是**同一条序列**，只是键形不同。保留此别名是为了让历史落盘文件与知识库能对上。"
@@ -293,6 +330,14 @@ families:
     method: 抽样调查
     coverage: 城镇常住人口
     scope: 城镇劳动力
+  "nbs|gdp|index_prev_year_100":
+    method: 国民经济核算
+    coverage: 中国大陆
+    scope: 经济活动总量
+  "imf|NGDP_RPCH":
+    method: 汇总汇编
+    coverage: 中国大陆
+    scope: 经济活动总量
 
 
 fields:

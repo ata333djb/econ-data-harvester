@@ -33,7 +33,8 @@
 14. python tools/scan-missing.py                       （缺失检测与分类）
 15. python tools/materialize-validated.py              （声明式清单落盘 validated）
 16. python tools/run-fill-strategy.py                  （填补策略执行器：只 leave_null/wait）
-17. python tools/export.py                             （导出 CSV + SQLite + 数据字典）
+17. python -m econ_core.credibility --test             （可信度评分自检，纯离线 0.5s）
+18. python tools/export.py                             （导出 CSV + SQLite + 数据字典）
 
 约定
 ----
@@ -128,6 +129,10 @@ CHECKS: list[Check] = [
     # run-fill-strategy 现已脱网（只读 data/validated/），但按保守策略先保留 420s，
     # 观察几轮确认稳定后再收回默认值。顺序上必须排在 materialize-validated 之后。
     Check("run-fill-strategy", "python", ["tools/run-fill-strategy.py"], timeout_s=420),
+    # credibility --test 纯离线，但它读三样东西：data/validated/（materialize-validated 产）、
+    # data/validated/cross_check/（compare-*.py 产）、data/processed/（run-fill-strategy 产）。
+    # 所以必须排在这三者之后，不能挪到 arbiter --test 旁边，否则干净检出时会误报。
+    Check("credibility --test", "python", ["-m", "econ_core.credibility", "--test"]),
     # export 只读 data/processed/，不联网，用默认超时
     Check("export", "python", ["tools/export.py"]),
 ]
