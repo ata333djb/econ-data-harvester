@@ -37,6 +37,10 @@ publishers:
     main_url: https://www.stats.gov.cn/
     license: 政府统计信息公开。按《中华人民共和国统计法》及其实施条例发布；未见明确的开源许可条款，商业再分发前请自行核实
     license_url: unknown
+    # 许可用途两列是为 HTML 质量报告的「许可证汇总表」加的；取值只依据上面的 license 原文，
+    # 原文没说清的（nbs 明写「请自行核实」）就记 unknown，不代为判断。
+    commercial_use: unknown          # 原文：未见明确的开源许可条款，商业再分发前请自行核实
+    redistribution: unknown          # 同上
     update_frequency: monthly
     revision_policy: "年度 GDP 走「初步核算 -> 初步核实 -> 最终核实」三步修订；月度/年度指标通常在下一次发布时回溯修订历史值"
     notes: "本项目走新版数据平台 data.stats.gov.cn/dg/website 的后端接口取数（旧版 easyquery.htm 已被 WAF 封禁）"
@@ -51,6 +55,8 @@ publishers:
     main_url: https://www.worldbank.org/
     license: 开放数据，多数指标为 CC BY 4.0（World Bank Open Data 条款）
     license_url: https://datacatalog.worldbank.org/public-licenses
+    commercial_use: yes              # CC BY 4.0 允许商业使用（须署名）
+    redistribution: yes              # 允许再分发（须署名 World Bank）
     update_frequency: quarterly
     revision_policy: "随来源机构（各国官方统计、国际组织）的修订同步更新；世界银行本身不对中国 GDP 做独立修订"
     notes: "World Bank 是**二次汇编方**：中国 GDP 复述 NBS 修订后的数字。实测其 NY.GDP.MKTP.CN 与本项目 NBS 序列逐字节相同"
@@ -65,6 +71,8 @@ publishers:
     main_url: https://www.imf.org/
     license: IMF 数据公开可用；再分发须署名 IMF 并附其使用条款
     license_url: https://www.imf.org/external/terms.htm
+    commercial_use: unknown          # 原文只说「公开可用」，未明确商业使用
+    redistribution: yes              # 原文：再分发须署名 IMF 并附其使用条款
     update_frequency: irregular
     revision_policy: "WEO 每年两次（4 月 / 10 月）整体重算并回溯修订历史值，并公布未来 5-6 年预测；本项目实测 CHN 覆盖到 2031（含预测）"
     notes: "DataMapper API 端点 api/v1。**实测 Akamai 会 403 掉 Chrome UA，只放行朴素 UA**（见 imf_client 模块注释）"

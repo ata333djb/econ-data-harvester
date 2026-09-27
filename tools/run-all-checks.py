@@ -35,6 +35,7 @@
 16. python tools/run-fill-strategy.py                  （填补策略执行器：只 leave_null/wait）
 17. python -m econ_core.credibility --test             （可信度评分自检，纯离线 0.5s）
 18. python tools/export.py                             （导出 CSV + SQLite + 数据字典）
+19. python tools/report.py --test                      （单文件 HTML 质量报告 + 7 项自检，纯离线）
 
 约定
 ----
@@ -135,6 +136,9 @@ CHECKS: list[Check] = [
     Check("credibility --test", "python", ["-m", "econ_core.credibility", "--test"]),
     # export 只读 data/processed/，不联网，用默认超时
     Check("export", "python", ["tools/export.py"]),
+    # report 读 data/ 下的 JSON 合成 HTML，不联网；arbiter/credibility 报告缺失时它会补生成，
+    # 所以排在最后（「产物 -> 展示」的顺序，export 本身不依赖它）。
+    Check("report", "python", ["tools/report.py", "--test"]),
 ]
 
 # --------------------------------------------------------------------------- #

@@ -6,7 +6,7 @@
 
 权威性顺序（冲突时以序号小的为准）：
 
-1. 门禁 tools/run-all-checks.py 的**实际输出**（当前应为 18/18 PASS）——这是唯一硬标准
+1. 门禁 tools/run-all-checks.py 的**实际输出**（当前应为 19/19 PASS）——这是唯一硬标准
 2. 本文件
 3. 各模块 docstring —— 细节、实测证据、踩坑经过都写在那里
 
@@ -50,6 +50,7 @@
 **输出层**
 
 - tools/export.py —— processed → CSV（data/output/econ_data.csv）+ SQLite（data/output/econ_data.db，含 observations 表 / idx_key_period 索引 / series_summary 视图）+ Markdown 数据字典（data/output/data_dictionary.md）
+- tools/report.py —— 把 5 份 JSON 报告合成**单文件 HTML**（data/output/report.html，非技术同事可直接看）
 
 **文档**
 
@@ -57,7 +58,7 @@
 - python/_probes/README.md —— 逆向探测脚本索引与已知观察（NBS 接口考古、缓存键缺陷等）
 - PROJECT_STATE.md —— 本文件
 
-### 1.2 门禁：18 项（tools/run-all-checks.py，当前 18/18 PASS）
+### 1.2 门禁：19 项（tools/run-all-checks.py，当前 19/19 PASS）
 
 | # | 检查 | 类型 | 说明 |
 |---|---|---|---|
@@ -79,17 +80,18 @@
 | 16 | run-fill-strategy | python | validated → processed（零填充，**已脱网**，约 0.4s） |
 | 17 | credibility --test | python | 可信度评分自检，5 个场景（纯离线，约 0.6s） |
 | 18 | export | python | processed → CSV / SQLite / 数据字典（纯离线） |
+| 19 | report | python | 5 份 JSON → 单文件 HTML 质量报告 + 7 项自检（纯离线，约 1s） |
 
-门禁的运行顺序**有依赖**：materialize-validated（15）-> run-fill-strategy（16）-> credibility（17）-> export（18）最后。credibility 读 validated + processed + cross_check 三样产物，所以不能挪到 arbiter 旁边（干净检出时会误报）。check-cli-envelope 与三个 compare 脚本是网络密集型，超时放宽到 420s。
+门禁的运行顺序**有依赖**：materialize-validated（15）-> run-fill-strategy（16）-> credibility（17）-> export（18）-> report（19）最后。credibility 读 validated + processed + cross_check 三样产物，所以不能挪到 arbiter 旁边（干净检出时会误报）。check-cli-envelope 与三个 compare 脚本是网络密集型，超时放宽到 420s。
 
 ### 1.3 当前数据规模
 
 - **声明式序列数**：9 条（NBS 6 + World Bank 1 + IMF 2）。missing_report.json 里的 n_series=19 是**含重复**的：声明式 9 条 + 落盘扫描 10 条键，同一条序列被算两遍
-- **总行数**：152 行（validated 9 个长表 JSON 的行数合计）
+- **总行数**：142 行（9 条落盘序列的全部年份合计）。注意：早期写的 152 是**重复计数**——把 alias 副本 `nbs|000000000000|db8e...`（与 `nbs|gdp|cny_100m` 同一条序列）也加了一遍
 - **缺失行数**：10 行（value 为 null / 空串 / NULL，**一个都没有填补**）
 - **缺失分类（按行统计）**：series_start 5 / discontinued 3 / not_yet_published 2 / true_gap **0**
 - **缺失动作（按行统计）**：leave_null 8 / wait 2 / interpolate 0
-- **row_sha16 覆盖率**：152/152（全部唯一）
+- **row_sha16 覆盖率**：142/142（全部唯一）
 - 落盘位置：data/validated/（9 个长表 JSON + missing_report.json）→ data/processed/（10 个带缺失元数据的 JSON）→ data/output/（CSV + SQLite + 字典）
 - 知识库另有 **2 条只用于对比、未落盘**的序列（nbs|gdp|index_prev_year_100、imf|NGDP_RPCH），所以知识库规范键 11 条 > 落盘序列 9 条
 
@@ -106,13 +108,12 @@
 9. imf|LUR（起点 2017）
 10. NBS|000000000000|db8e5a86c08246e79b1b11251927e740（**别名**，指向第 1 条）
 
-### 1.4 最近一轮新增（方向 A 第三轮：可信度评分）
+### 1.4 最近一轮新增（方向 D 第一轮：HTML 质量报告）
 
-- python/econ_core/credibility.py —— score_series / score_all / write_credibility_report + 5 场景自检
-- python/econ_core/arbiter.py —— 加 alignment 字段（aligned / profile_stricter / measured_stricter）
-- source_profiles.yaml —— 补两条**只用于对比、未落盘**的序列，arbiter 从 5 对变 6 对（gdp_real 那对现在判同口径）
-- data/validated/{arbiter,credibility}/ —— 口径判定报告 + 可信度评分报告（本轮新增产出目录）
-- tools/run-all-checks.py —— 门禁从 17 项加到 18 项
+- tools/report.py —— 5 份 JSON -> 单文件 HTML（data/output/report.html，约 39.6KB，8 节）+ 7 项自检；Jinja2 模板 + Plotly 走 CDN
+- source_profiles.yaml —— publishers 段补 commercial_use / redistribution（HTML 许可证表要用）
+- **修正一个长期错误**：总行数一直写的 152 是**重复计数**（alias 副本被算了两遍），实际 **142** 行
+- tools/run-all-checks.py —— 门禁从 18 项加到 19 项
 
 ---
 
@@ -237,7 +238,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 ### 3.6 venv 里已装 PyYAML 6.0.3（以及 pandas / pyarrow / numpy）
 
 - venv **原本没有 PyYAML**；source_profiler 加载知识库需要它，已用 `pip_sandbox_install.py install pyyaml` 安装
-- 若在新机器上重建环境，需补装：pyyaml（知识库必需）；pandas + pyarrow（仅 write_validated_parquet 需要）
+- 若在新机器上重建环境，需补装：pyyaml（知识库必需）、**jinja2（HTML 报告必需）**；pandas + pyarrow（仅 write_validated_parquet 需要）
 - 缺依赖时报错会直接给出安装命令，不会静默降级
 
 ### 3.7 ⚠️ 本机沙箱 ACL runner 故障（环境问题，不是策略拒绝）
@@ -331,7 +332,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
                                                                                 v
                                           (下一轮) Arbiter: 同口径 / 可桥接 / 不可拼接
 
-    横切: tools/run-all-checks.py —— 18 项门禁，任何改动后必跑
+    横切: tools/run-all-checks.py —— 19 项门禁，任何改动后必跑
 
 ### 4.2 每层职责与产物
 
@@ -364,20 +365,20 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 ### 5.1 方向 A 第二轮：口径判定 Arbiter —— 已完成
 
-- 产出：python/econ_core/arbiter.py + 判定报告落盘 data/validated/arbiter/（**6 对** + _index.json）
-- 实测差异**不重跑取数**，直接读 data/validated/cross_check/*.json；可识别 4 种形状，认不出就跳过记 warning
-- 判定优先级：高影响 unknown（statistical_method / coverage / population_scope）-> 人工复核；低影响 unknown -> 保留原判定并记 knowledge_gaps；alignment 记画像与实测是否同调（见 5.4）
+- 产出：python/econ_core/arbiter.py + 报告落盘 data/validated/arbiter/（**6 对** + _index.json）
+- 实测差异读 cross_check/*.json **不重跑取数**；高影响 unknown -> 人工复核，低影响 unknown -> 保留原判定并记 knowledge_gaps；alignment 记画像与实测是否同调（见 5.4）
 
 ### 5.2 方向 A 第三轮：可信度评分 —— 已完成
 
 - 产出：python/econ_core/credibility.py + 报告落盘 data/validated/credibility/（11 条 + _index.json）
 - 五维加权：Expertise 0.25 / Provenance 0.20 / Timeliness 0.10 / Transparency 0.15 / Coherence 0.30 -> 0-100 分 + high/medium/low
-- 当前分布：8 high / 3 medium / 0 low；最高 nbs|surveyed_unemployment 95.5，最低 imf|NGDP_RPCH 77.25
-- 两条只用于对比、未落盘的序列（nbs|gdp|index_prev_year_100、imf|NGDP_RPCH）provenance 只有 30（没有 series_file）
+- 当前分布：8 high / 3 medium / 0 low；最高 nbs|surveyed_unemployment 95.5，最低 imf|NGDP_RPCH 77.25。两条只用于对比、未落盘的序列 provenance 只有 30（没有 series_file）
 
-### 5.3 方向 A 第四轮（可选）与之后
+### 5.3 方向 D 与之后的待办
 
-- **方向 A 第四轮（可选）**：拼接断点检查 / PROV-JSON 溯源导出 / HTML 报告 —— 都还没开始，优先级待定
+- **方向 D 第一轮：HTML 质量报告 —— 已完成（本轮）**：tools/report.py -> data/output/report.html（8 节：总览 / 可信度排名 / 雷达图 / 口径分歧 / 缺失分布 / 许可证 / 页脚）
+- **方向 D 后续（可选）**：图表内联（去掉 Plotly CDN 依赖）/ 导出 PDF / 把报告挂到 CI
+- **方向 A 第四轮（可选）**：拼接断点检查 / PROV-JSON 溯源导出 —— 还没开始，优先级待定
 - **产品化**：桌面版 preset（家目录已同步三套 adapter，需要确认桌面版实际加载的是哪一份）
 - **加源**：OECD / BIS / FRED。每加一条序列**必须补知识库条目**，否则 profiler 抛 KeyError
 - **落地插值**：当前 true_gap = 0 例，所以插值实现故意留空（出现 interpolate 会抛 NotImplementedError）。等真遇到上游序列中断再实现，并同步补回归
@@ -400,7 +401,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 
 | 文件 | 一句话职责 |
 |---|---|
-| run-all-checks.py | 门禁总入口：顺序跑 18 项检查，失败即停；支持逐检查 timeout 覆盖 |
+| run-all-checks.py | 门禁总入口：顺序跑 19 项检查，失败即停；支持逐检查 timeout 覆盖 |
 | check-cli-envelope.py | 契约测试：真跑 10 个子命令（11 用例），按 R1-R11 校验 stdout 信封；超时 420s |
 | smoke-nbs-adapter.mjs | NBS 插件冒烟：桩替换 execFile，验证 argv 与必填校验 |
 | smoke-worldbank-adapter.mjs | World Bank 插件冒烟（含 wantArgv 精确比对） |
@@ -414,6 +415,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 | materialize-validated.py | 把声明式清单落盘 data/validated/（复用 scan-missing 的清单，不复制） |
 | run-fill-strategy.py | 一键 validated -> processed；内置 raw 缓存快照对比证明脱网 |
 | export.py | 输出层：processed -> CSV（utf-8-sig）+ SQLite（表/索引/视图）+ Markdown 数据字典 |
+| report.py | 展示层：5 份 JSON -> 单文件 HTML 质量报告（Plotly 走 CDN）+ 7 项自检 |
 
 ### 6.3 src/plugins/ 与 .dsh/ —— 会话装配
 
@@ -446,7 +448,7 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
 | data/validated/{arbiter,credibility}/ | 口径判定报告（6 对）/ 可信度评分报告（11 条） |
 | data/validated/cross_check/ | 三个对比脚本的结果 JSON |
 | data/processed/{nbs,worldbank,imf}/ | 带缺失元数据的行（10 个文件） |
-| data/output/ | 产品：econ_data.csv / econ_data.db / data_dictionary.md |
+| data/output/ | 产品：econ_data.csv / econ_data.db / data_dictionary.md / **report.html** |
 
 ### 6.6 项目根其他文件
 
@@ -470,25 +472,21 @@ region_code / region_name / indicator_id / tree_node_id / indicator_name / perio
        cd D:\universe\econ-data-harvester
        .\.venv\Scripts\python.exe tools\run-all-checks.py
 
-   期望 18/18 PASS，exit 0。若不是 18/18，先定位是哪一项退化了，不要继续叠加改动。
-4. 报告状态：门禁结果、git status、当前数据规模（9 条声明式序列 / 152 行 / 10 缺失行），然后停下等指令
+   期望 19/19 PASS，exit 0。若不是 19/19，先定位是哪一项退化了，不要继续叠加改动。
+4. 报告状态：门禁结果、git status、当前数据规模（9 条声明式序列 / 142 行 / 10 缺失行），然后停下等指令
 
 ### 7.1 报告模板（建议照抄）
 
-    门禁：18/18 PASS（exit 0）
+    门禁：19/19 PASS（exit 0）
     working tree：<git status --short 的内容>
-    数据：9 条声明式序列 / 152 行 / 10 缺失行（按行：series_start 5, discontinued 3, not_yet_published 2, true_gap 0）
-    下一步待办：方向 A 第四轮（可选）「拼接断点检查 / PROV-JSON / HTML 报告」
+    数据：9 条声明式序列 / 142 行 / 10 缺失行（按行：series_start 5, discontinued 3, not_yet_published 2, true_gap 0）
+    下一步待办：方向 D 后续（可选）「图表内联 / 导出 PDF / 挂 CI」
 
-### 7.2 开工前的三条自检
+### 7.2 改动后的固定动作
 
-- 环境：pwsh 是否报 ACL runner 故障？若是，按第 3.7 节的方式先试普通模式再提权
-- 依赖：PyYAML 是否可导入？（python -c "import yaml"）
-- 数据：若 data/validated 是空的（干净检出），先跑 materialize-validated 再跑 run-fill-strategy 与 export
+- 开工前自检：pwsh 报 ACL 故障见 3.7；import yaml / Jinja2 见 3.6；data/validated 为空则先跑 materialize-validated
 
-### 7.3 改动后的固定动作
-
-1. 跑完整门禁，确认仍 18/18（新增检查要同步加进 CHECKS 与 docstring 编号）
+1. 跑完整门禁，确认仍 19/19（新增检查要同步加进 CHECKS 与 docstring 编号）
 2. 新增序列 -> 补 source_profiles.yaml 条目（否则 profiler 抛 KeyError）
 3. 改契约/分类/字段名 -> 同步更新本文件的第 2 节与第 3 节
 4. 不要把 data/ 下的产物提交进 git（它们已被忽略）；不要把 raw 存档删掉（那是证据链）
