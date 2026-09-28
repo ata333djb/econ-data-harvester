@@ -76,10 +76,10 @@
 | 6 | check-cli-envelope | 真跑 12 个子命令（13 用例）校验 stdout 信封契约 R1-R11；timeout 420s |
 | 7 | missing --test | 缺失四分类自检（纯离线） |
 | 8 | source_profiler --test | 来源画像自检，8 场景（纯离线） |
-| 9 | arbiter --test | 口径判定自检，7 场景（纯离线） |
-| 10 | normalize --test | 规范化层自检（row_sha16 唯一性、i_name null 补齐） |
-| 11 | cross_validation --test | 交叉验证四段阈值自检（纯离线） |
-| 12-16 | compare-{gdp,gdp-3way,gdp-real,unemployment,cpi} | 五条交叉验证链路；3way/cpi timeout 420s |
+| 9 | normalize --test | 规范化层自检（row_sha16 唯一性、i_name null 补齐） |
+| 10 | cross_validation --test | 交叉验证四段阈值自检（纯离线） |
+| 11-15 | compare-{gdp,gdp-3way,gdp-real,unemployment,cpi} | 五条交叉验证链路；3way/cpi timeout 420s |
+| 16 | arbiter --test | 口径判定自检，7 场景（纯离线）—— **必须排在 11–15 之后**，见 §3.20 |
 | 17 | scan-missing | 缺失检测与分类，产出 `missing_report.json`；timeout 420s |
 | 18 | materialize-validated | 声明式清单落盘 `data/validated/`；timeout 420s |
 | 19 | run-fill-strategy | validated -> processed（零填充，**已脱网**） |
@@ -97,7 +97,9 @@
 
 顺序**有依赖**：18 -> 19 -> 20 -> 21 -> 22 -> 23 -> 24。credibility 读 validated + processed +
 cross_check 三样产物（不能挪到 arbiter 旁）；**splice-cpi 读 materialize-validated 产出的 NBS CPI 文件，
-必须排在它之后**。网络密集型检查 timeout 放宽到 420s。25/26 是纯离线，27–30 是**联网**的，
+必须排在它之后**；**arbiter（16）读 compare-*（11–15）写进 `cross_check/` 的产物，所以必须排在它们之后**
+（曾经排在第 9 项 —— 那是"后置依赖"，门禁失败即停会让它永远自愈不了，§3.20）。
+网络密集型检查 timeout 放宽到 420s。25/26 是纯离线，27–30 是**联网**的，
 且 25 -> 26 -> 27 -> 28 -> 29 -> 30 的次序有理由：先确认目录本身没坏，再验"按目录取数"这条路，
 最后验"取到的数能落进 validated 并接上下游" —— **目录对不等于取数对，取数对也不等于接得上**。
 **29/30 都刻意不写 `data/validated/`**（29 只写 `.exporter-selftest/`，30 用 `--dry-run`）：
@@ -161,8 +163,8 @@ argparse / 渲染 / 退出码）；④ 第 27/28 项（`fetcher` 是"目录配�
 - **两处刻意偏离任务书字面**（都是为了让下游真能读，详见 §2.16）：① `expected_periods` 写
   **列表**不是字符串（`fill_strategy` 拿它当期间网格）；② **默认拒绝"缩水/换粒度"覆盖** ——
   否则 `edh export CPI --from 2020 --to 2024` 会把 380 期的 BIS 文件砍成 60 期，**静默毁掉证据链**
-- **顺带抓出一个与本题无关的门禁缺陷**（§3.20）：`arbiter --test` 的断言**与日期绑死**，
-  同一天跑第二次门禁必挂
+- **顺带抓出并修掉一个与本题无关的门禁缺陷**：`arbiter --test` 原本与**日期**绑死（同一天跑第二次
+  必挂）。已修：compare 脚本清理同族旧文件 + `arbiter` 移到 compare-* 之后 —— 详见 §3.20
 
 ### 1.5 更早几轮（压缩存档）
 
@@ -180,17 +182,15 @@ argparse / 渲染 / 退出码）；④ 第 27/28 项（`fetcher` 是"目录配�
 - **方向 C 第五轮（rebase）**：`splicer.rebase()` 的 `ratio`/`difference` + `splice(rebase=...)`；
   自检 46 -> 58。**关键结论：rebase 只调水平不调斜率，对当前 CPI 用例无效**（触发「需桥接」的是
   `trend_break` 而非 `level_jump`；且 NBS 完全落在 BIS 跨度内 -> `applied=False`，故三模式
-  verdict 相同**不构成**"rebase 无效"的证据）。当轮修 5 个 bug（§5.4 留两条）
-- **方向 C 第四轮**：修 `http_client` 大小写缺陷（§3.13，顺带修掉一处 `KeyError`）；BIS 两条接进
+  verdict 相同**不构成**"rebase 无效"的证据）。当轮修 5 个 bug（§5.4 留两条）- **方向 C 第四轮**：修 `http_client` 大小写缺陷（§3.13，顺带修掉一处 `KeyError`）；BIS 两条接进
   声明式清单打通 validated -> processed -> 导出（152 -> **900 行**）；新增 `splicer.py` +
   `tools/splice-cpi.py`（首次真实拼接 30 期 / 拼接点 2015）；修掉落盘扫描**去重从来没生效**的
-  静默 bug（§3.14，n_series 23 -> 13）。门禁 22 -> 24
+  静默 bug（§3.14）。门禁 22 -> 24
 - **方向 C 第三轮**：四源独立性探测固化（§3.10/3.11/3.12）；新增 `bis_client.py` + CLI + adapter +
   smoke + 知识库 BIS 条目（自检 14/14）；门禁 21 -> 22；修 `verify-preset.mjs` 的 default 断言
   （容错内置 preset `standard`，它**不在门禁里，要手工跑**）
 - **更早**：`arbiter._adapt` 改成**数据驱动**（读产物自带的 `series_a`/`series_b`/`measured`，
   不再按键名猜形状），5 个对比脚本输出都补了这三个字段
-
 ## 2. 关键约定（未来必须遵守）
 
 ### 2.1 运行环境（硬编码，不要改成 PATH 里的 python）
@@ -336,13 +336,12 @@ indicator_id 必须 != tree_node_id；**R11（关键）**：command 含 fetch �
   内嵌解释器自带 `libssl-3.dll`/`libcrypto-3.dll`（OpenSSL 3.0.15），对
   `data.stats.gov.cn` 与 `api.worldbank.org` 都是 HTTP 200
 - **`.bat` 必须纯 ASCII**：cmd.exe 按**控制台码页**读 .bat，写中文会被读成乱码并当命令执行
-  （实测报 `'0' is not recognized…`）。校验方式：`非 ASCII 字节数 == 0`
+  （实测报 `'0' is not recognized…`）。校验：`非 ASCII 字节数 == 0`
 - **控制台码页要对齐**：Python 侧发 UTF-8 而控制台默认 936(GBK)/437，不对齐中文就是花的。
   `edh.bat` 里 `chcp 65001` 并在结束时**恢复原码页**（实测 936 -> 65001 -> 936）
 - **打包范围是白名单**，不是"dist/ 下所有东西"：`.build/`、`.tmp/`、`get-pip.py` 都是脚手架。
   `make-dist-zip.py` 有自检断言这件事
-- **zip 路径必须正斜杠**（APPNOTE 4.4.17.1）：`Compress-Archive` 写反斜杠，Windows 资源管理器
-  能解所以**本地测不出来**，但 Linux/macOS 的 unzip 会把整条路径当成一个文件名（§3.19）
+- **zip 路径必须正斜杠**（APPNOTE 4.4.17.1）：`Compress-Archive` 写反斜杠，资源管理器容错所以本地看不出，但 Linux/macOS `unzip` 会把整条路径当成一个文件名（§3.19）
 - **`python/` 只带 `econ_core`**（不含 `_probes`/`__pycache__`）；`tools/` 只带 `edh.py`
 - **改完代码要重打 zip**：`tools\make-dist-zip.py`（分发的是 `.py` 源码，**必须重打**用户才拿到新版）
 
@@ -352,8 +351,7 @@ indicator_id 必须 != tree_node_id；**R11（关键）**：command 含 fetch �
   **只有"同一个源 + 同一个统计口径"才算对上**；对不上写 `null`，`edh export` **跳过并报出来**
   （不是错误）。覆盖率实测 **57 处中 12 处对上**。加新指标时这一项必填，否则那些行永远落不了盘
 - **落盘形状必须与 `materialize-validated.py` 一致**：信封 = `normalize.write_validated()` 的 5 个键
-  + `series_key` / `expected_periods`。**行序列化与 columns 交给 `normalize`**（单一真源），
-  本层不自己拼 —— 两边手写迟早漂移
+  + `series_key` / `expected_periods`；**行序列化与 columns 交给 `normalize`**（单一真源），不自己拼
 - ⚠️ **`expected_periods` 是列表不是字符串**（任务书写 `"2015-2024"`）：`fill_strategy` 拿它当
   **期间网格**，写字符串 = 头部缺口永远判不出来。另附 `expected_periods_label` 供人读
 - **`row_sha16` 必须在 `raw_fields` 之前**（`columns` 顺序 = dict 插入序）；而 `_row_sha16` 会哈希
@@ -427,9 +425,9 @@ jinja2（HTML 报告必需）**；pandas + pyarrow（仅 `write_validated_parque
 
 ### 3.8 其他容易踩的（按层归类）
 
-**NBS 取数**：调查失业率**只在月度树（code=1）**，年度树里没有（登记失业率反过来）；
-实测从 2018-01 起才有数据（请求 2017 也只回 2018+）；登记失业率 2022/23/24 的 v 是**空串**
-（节点还在但不更新）；目录树里 13 个「失业」节点绝大多数是失业保险基金/参保人数，不是失业率。
+**NBS 取数**：调查失业率**只在月度树（code=1）**，年度树里没有（登记失业率反过来）；实测从 2018-01
+起才有数据（请求 2017 也只回 2018+）；登记失业率 2022/23/24 的 v 是**空串**（节点还在但不更新）；
+目录树里 13 个「失业」节点绝大多数是失业保险基金/参保人数，不是失业率。
 
 **CPI 宽表**：`yData[].value` 是**字符串数组**（如 `"101.4"`），必须过 parse_value，否则会被当成
 「全缺失」并误判 discontinued；`yData[].du` 是**数据单位 id，三条序列共用同一个值**，不能直接当
@@ -525,9 +523,9 @@ vs `nbs|000000000000|db8e5a86…`）。于是 `if key in declared_keys: 跳过` 
 
 ### 3.15 ⚠️ 「行数」不等于「有数据」——探测/校验一律数非空值
 
-NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1月"）、`v` 是**空串**、
-`du` / `i` 也全空 —— 所以 `len(raw)` 正常而内容全空。第一版 catalog 终验按行数判，
-把 3 条映射判成通过，其中 **1 条是假通过**（NBS 外商直接投资：2024 年 12 行全空）。
+NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1月"）、`v` 是**空串**、`du` / `i` 也全空
+—— 所以 `len(raw)` 正常而内容全空。第一版 catalog 终验按行数判，把 3 条映射判成通过，
+其中 **1 条是假通过**（NBS 外商直接投资：2024 年 12 行全空）。
 
 - **判据改成「非空值个数」**后，三个"有行无值"的序列立刻分成两类：
   **`industrial_production` / `retail_sales` 没问题**（12 期里 10 期有值，空的是 **1 月** ——
@@ -559,8 +557,7 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
 
 ### 3.18 ⚠️ 三个"看着对、其实错"的输出层坑（方向 E 第二轮实测）
 
-都发生在**输出/簿记**层，不是取数逻辑错 —— 不会让断言变红，只会让用户看到错东西
-（细节见 `fetcher.py` / `tools/edh.py` 的 docstring）：
+都发生在**输出/簿记**层，不是取数逻辑错 —— 不会让断言变红，只会让用户看到错东西（细节见 `fetcher.py` / `tools/edh.py` 的 docstring）：
 
 - **模块级"最近一次状态"被循环里的下一次调用清空**：`fetch_indicator` 开头 `_NOTES.clear()`，
   于是 `fetch_all_sources` 每取一个源就抹掉前一个源的记录（4 个源显示 1 个）。
@@ -588,16 +585,23 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
   但 `zipfile` / Linux `unzip` 会把 `embedded-python\python.exe` 当成**一个文件名**
 - 附带：`Encoding.ASCII` **静默**把非 ASCII 换成 `?`；用它写文件前先确认源文本本来就是 ASCII
 
-### 3.20 ⚠️ `arbiter --test` 的断言与**日期**绑死（门禁同一天跑第二次必挂）
+### 3.20 `arbiter --test` 曾与**日期**绑死（门禁同一天跑第二次必挂）——**已修**
 
-- **现象**：门禁第 9 项在某日期**第二次**跑必 FAIL：`7: arbiter 记录数期望 7，实际 13`
-- **机理**：`arbiter --test` 是**第 9 项**，而写 `data/validated/cross_check/*.json` 的
-  `compare-*.py` 是**第 12–16 项** —— **排在后**，所以第 9 项读到的永远是**上一次运行**的遗留；
-  而 compare 脚本文件名带日期戳（`gdp_3way_20260927.json`）且**从不清理旧日期** -> 每跨一天多一整套
-- **为什么长期没暴露**：一天只跑一次门禁，就永远看到 7 条。本轮连跑两次才撞出来
-- **临时处置**：删掉旧日期那一套（`cross_check/*_<昨天>.json`）—— 本次 check 12–16 会重新生成
-- **待修（本轮未做）**：compare 脚本改写**固定文件名**，或写完顺手删同族旧日期文件；
-  或让门禁在 check 9 之前清一次。**没动是因为任务约束写着"不改现有门禁条目"**
+- **现象**：门禁某天**第二次**跑必 FAIL：`7: arbiter 记录数期望 7，实际 13`（种两套旧文件时到 14）
+- **机理**：`arbiter --test` 原本是**第 9 项**，而写 `data/validated/cross_check/*.json` 的 `compare-*.py`
+  排在**第 12–16 项**（**之后**），所以第 9 项读到的永远是**上一次运行**的遗留；而 compare 脚本文件名
+  带日期戳（`gdp_3way_20260927.json`）且**从不清理旧日期** -> 每跨一天多一整套
+- **更致命的一半**：门禁**失败即停** —— 第 9 项一挂，后面负责清理的 compare 根本没机会跑，
+  **目录一旦脏掉就再也自愈不了**（复现过：种进旧文件后，旧代码连跑几次都停在 16/30 之前）
+- **为什么长期没暴露**：一天只跑一次门禁，就永远看到 7 条
+- **修法（两处一起，缺一不可）**：① compare 脚本写完删同族旧日期文件 —— 新增
+  `econ_core/cross_check_store.py:save_result()`，四个脚本各一行改动；清理范围严格限定
+  `<family>_<8 位数字>.json` 且父目录一致，**不碰**非日期戳文件（实测 `gdp_3way_notes.json` 这种诱饵
+  不会被误删）。② **`arbiter --test` 从第 9 项移到 compare-* 之后（第 16 项）** —— 只靠 ① 不够：
+  脏目录下第 9 项仍会先挂、清理永远轮不到
+- **验证**：种进 3 套日期文件 -> 跑一次门禁即自愈（30/30，目录回到每族 1 份）；连跑两次均 **30/30 PASS**
+- **教训**：**门禁里"失败即停"和"后置依赖"叠加会变成死锁** —— 某项读的产物由排在它后面的项生成时，
+  它一旦失败，修复动作就永远不会执行。加检查时先问"它读的东西是谁写的、排在我前面吗"
 
 ## 4. 架构图
 
@@ -631,17 +635,16 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
 | 策略 | fill_strategy.py | validated + missing_report | `data/processed/<source>/…_processed.json` |
 | 拼接 | splicer.py + tools/splice-cpi.py | 两条同指标序列 | `data/validated/spliced/`（结果 + 重叠期 + 断点 + verdict） |
 | 输出 | export.py / report.py | processed | `data/output/`：CSV / SQLite / 字典 / report.html |
-| 画像 | source_profiler + arbiter + credibility | 知识库 + validated + missing_report | 内存画像与落盘报告 |
-| **目录** | catalog.py + catalog_data.yaml + fetcher.py + tools/edh.py | 用户输入的指标名 | stdout 表格 / CSV；`fetch` 走采集层取数但**不落盘** |
+| 画像 | source_profiler + arbiter + credibility | 知识库 + validated + missing_report | 内存画像与落盘报告 || **目录** | catalog.py + catalog_data.yaml + fetcher.py + tools/edh.py | 用户输入的指标名 | stdout 表格 / CSV；`fetch` 走采集层取数但**不落盘** |
 | **导出** | exporter.py + `edh export` | fetch 的 9 字段行 | `data/validated/<source>/*.json`（形状同 materialize-validated）-> 下游自动可见 —— §2.16 |
 | **分发** | dist/ + tools/{analyze-deps,download,make-dist-zip}.py | 项目源码 | `dist/econ-data-harvester-v0.2.zip`（用户无需装 Python）—— §2.15 / PACKAGING.md |
 
-**目录层是整条链的入口**（只翻译、不生产）。**导出层把入口接回主干**：方向 G 之前
-`fetch` 是个死胡同（数据只到用户手上），现在 `edh export` 把同一批行转成长表落进 validated，
-画像/判定/评分/报告立刻看得到 —— **"用户产品"和"验证链路"由此闭环**（§2.16）。
+**目录层是整条链的入口**（只翻译、不生产）。**导出层把入口接回主干**：方向 G 之前 `fetch` 是个
+死胡同（数据只到用户手上），现在 `edh export` 把同一批行转成长表落进 validated，画像/判定/评分/报告
+立刻看得到 —— **"用户产品"和"验证链路"由此闭环**（§2.16）。
 **分发层是出口形态**（无新逻辑，同一份 `.py` + 内嵌 Python 打包）；**改了 `.py` 就要重打 zip**（§2.15）
 
-**拼接层的位置**：语义上在 validated 之后、processed 之前，但**本轮刻意不接进 processed**
+**拼接层的位置**：语义上在 validated 之后、processed 之前，但**刻意不接进 processed**
 （`fill_strategy` 不认识拼接产物，硬接要动它的扫描规则）。拼接产物落在 `data/validated/spliced/`，
 它没有 `value` 键的顶层 rows 结构，所以不会被落盘扫描误当序列（§3.8）。
 
@@ -673,20 +676,16 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
 ### 5.3 待办（按优先级）
 
 - **① 方向 G 收尾：作者侧的 export（高）** —— `edh export` 已打通"用户产品 -> validated"，
-  但它是**用户手动触发**的。仍缺的是：① 把声明式清单与 export 产物**合流**
-  （现在两条路径各写各的，同一个 `series_key` 可能被两边覆盖，虽然 §2.16 的覆盖保护拦着）；
-  ② `--refresh` 目前只跑 `profile_series`，**不跑下游**（scan-missing / fill-strategy /
-  credibility / report 仍要手工串）。要不要做成 `edh export --refresh --full` 值得讨论
-- **② 修 §3.20 的门禁日期缺陷（中，但重要）** —— `arbiter --test` 同一天跑第二次必挂。
-  最小修法：`compare-*.py` 写固定文件名（或写完删同族旧日期文件）。**本轮没动是遵守约束**
-- **③ 批量的多指标 export（中）** —— `edh export GDP CPI M2` 已经能用，但**每写一个序列
-  就重打一次整份 validated 的覆盖保护判断**，指标多了会慢；且没有任何"这次导出改了哪几条"的汇总
-- **④ 分发包收尾（中）** —— 打包（方向 F）已结项、zip 已验证可用，只剩 4 件小事，
+  但它是**用户手动触发**的。仍缺：把声明式清单与 export 产物**合流**（现在两条路径各写各的，
+  同一个 `series_key` 可能被两边覆盖，虽然 §2.16 的覆盖保护拦着）；`--refresh` 目前只跑
+  `profile_series`、**不跑下游**（scan-missing / fill-strategy / credibility / report 仍要手工串）——
+  要不要做成 `edh export --refresh --full` 值得讨论
+- **② 多指标批量 export 的收尾（中）** —— `edh export GDP CPI M2` 已经能用，但每写一个序列就重判
+  一次整份 validated 的覆盖保护，指标多了会慢；且没有"这次导出改了哪几条"的汇总
+- **③ 分发包收尾（中）** —— 打包（方向 F）已结项、zip 已验证可用，只剩 4 件小事，
   **清单在 `PACKAGING.md` §4，本文件不重复维护**。要点：pip 没装进内嵌 Python（低优先级，
   核心功能不依赖）；`examples/` 与 `report.html` 自述差 2 个文件；LICENSE 署名待实名；
   打包工具刻意没进门禁
-- **③ 多指标批量取数（中）** —— 目录能查 18 个指标，但 `edh fetch` 一次只取一个。
-  批量要先定"多指标的 CSV 怎么合"（`indicator` 列已在，主要是窗口/频率取交集的问题）
 - **④ 拼接产物进 processed / 导出（中）** —— 现在只到 `data/validated/spliced/`。要进导出链路，
   得先让 `fill_strategy` 认识拼接产物（它现在只认 `rows` 长表）
 - **⑤ `RELATIVE_METRIC_FLOOR` 按量纲配置（低）** —— 见 §5.4，0.5 只适配百分点量纲
@@ -768,7 +767,8 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
        cd D:\universe\econ-data-harvester
        .\.venv\Scripts\python.exe tools\run-all-checks.py
 
-   ⚠️ **同一天跑第二次之前先看 §3.20**（`arbiter --test` 的断言与日期绑死，会误报 FAIL）。
+   ⚠️ 门禁是**可重复**的：同一天连跑两次必须都是 30/30。做不到就意味着
+   "后置依赖"又出现了 —— 见 §3.20（`arbiter --test` 已因此从第 9 项移到第 16 项）。
 
 4. 报告状态（照抄此模板）：
 
@@ -778,10 +778,10 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
        目录：18 个指标 / 51 条源映射（3 条探过并确认不可用，未收录；57 处 kb_series_key 里 12 处对上知识库）
 
 **改动后的固定动作**：① 开工前自检（pwsh ACL 故障见 §3.7；yaml/Jinja2 见 §3.6；validated 为空先跑
-materialize-validated）；② 跑完整门禁确认仍 30/30（新增检查要同步加进 `CHECKS` 与 docstring 编号）；
-③ 新增序列必须补 `source_profiles.yaml` 条目（否则 profiler 抛 KeyError）；
-**③b 动 `catalog_data.yaml` 要跑 `probe_catalog_sources.py verify`（§2.13），
-新增指标还要填 `kb_series_key`（§2.16，否则永远落不了盘）**；
+materialize-validated）；② 跑完整门禁确认仍 30/30（新增检查要同步加进 `CHECKS` 与 docstring 编号，
+**且要问清"它读的产物是谁写的、排在我前面吗"** §3.20）；③ 新增序列必须补 `source_profiles.yaml`
+条目（否则 profiler 抛 KeyError）；**③b 动 `catalog_data.yaml` 要跑 `probe_catalog_sources.py verify`
+（§2.13），新增指标还要填 `kb_series_key`（§2.16，否则永远落不了盘）**；
 ④ 改契约/分类/字段名要同步更新本文件第 2、3 节；⑤ **不要把 data/ 下的产物提交进 git**，
 **不要删 raw 存档**（那是证据链）。
 

@@ -56,7 +56,9 @@ from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
-from econ_core import imf_client, nbs_client, normalize  # noqa: E402
+from econ_core import (  # noqa: E402
+    cross_check_store, imf_client, nbs_client, normalize,
+)
 
 # --------------------------------------------------------------------------- #
 # 常量
@@ -250,8 +252,11 @@ def main() -> int:
         "rows": table,
         "problems": problems,
     }
-    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    removed = cross_check_store.save_result(payload, out, "gdp_real", RESULTS_DIR)
     print(f"  [saved] {out}")
+    if removed:
+        print(f"  [pruned] 清掉同族旧日期文件 {len(removed)} 个: "
+              f"{', '.join(p.name for p in removed)}")
 
     if problems:
         print(file=sys.stderr)

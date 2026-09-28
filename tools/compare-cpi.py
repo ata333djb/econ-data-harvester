@@ -51,7 +51,7 @@ from typing import Any, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
-from econ_core import fred_client, nbs_client, normalize  # noqa: E402
+from econ_core import cross_check_store, fred_client, nbs_client, normalize  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 # 常量
@@ -247,9 +247,12 @@ def main() -> int:
         "rows": rows,
         "problems": problems,
     }
-    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    removed = cross_check_store.save_result(payload, out, "cpi_3way", RESULTS_DIR)
     print()
     print(f"  结果已写入: {out.relative_to(Path(__file__).resolve().parents[1])}")
+    if removed:
+        print(f"  [pruned] 清掉同族旧日期文件 {len(removed)} 个: "
+              f"{', '.join(p.name for p in removed)}")
     print()
     print("=" * 104)
     print("[PASS] CPI 交叉验证完成" if not problems else f"[FAIL] {len(problems)} 个问题")

@@ -25,14 +25,14 @@
 6. python tools/check-cli-envelope.py                  （真跑 CLI 的信封契约）
 7. python -m econ_core.missing --test                  （缺失分类自检，纯离线 0.1s）
 8. python -m econ_core.source_profiler --test          （来源画像自检，纯离线 0.2s）
-9. python -m econ_core.arbiter --test                  （口径判定自检，纯离线 0.3s）
-10. python -m econ_core.normalize --test                （规范化层自检）
-11. python -m econ_core.cross_validation --test         （交叉验证自检）
-12. python tools/compare-gdp.py                         （NBS vs World Bank 端到端）
-13. python tools/compare-gdp-3way.py                    （NBS vs WB vs IMF 三方交叉验证）
-14. python tools/compare-gdp-real.py                    （NBS vs IMF 实际增速，无汇率污染）
-15. python tools/compare-unemployment.py               （失业率三方：登记/调查 vs IMF LUR）
-16. python tools/compare-cpi.py                        （CPI 交叉验证：NBS vs FRED/OECD）
+9. python -m econ_core.normalize --test                （规范化层自检）
+10. python -m econ_core.cross_validation --test         （交叉验证自检）
+11. python tools/compare-gdp.py                         （NBS vs World Bank 端到端）
+12. python tools/compare-gdp-3way.py                    （NBS vs WB vs IMF 三方交叉验证）
+13. python tools/compare-gdp-real.py                    （NBS vs IMF 实际增速，无汇率污染）
+14. python tools/compare-unemployment.py               （失业率三方：登记/调查 vs IMF LUR）
+15. python tools/compare-cpi.py                        （CPI 交叉验证：NBS vs FRED/OECD）
+16. python -m econ_core.arbiter --test                  （口径判定自检；**必须排在 compare-* 之后**）
 17. python tools/scan-missing.py                       （缺失检测与分类）
 18. python tools/materialize-validated.py              （声明式清单落盘 validated）
 19. python tools/run-fill-strategy.py                  （填补策略执行器：只 leave_null/wait）
@@ -128,9 +128,6 @@ CHECKS: list[Check] = [
     # source_profiler --test 同样纯离线（读知识库 YAML + 读已有 validated 文件），0.2s 级
     Check("source_profiler --test", "python",
           ["-m", "econ_core.source_profiler", "--test"]),
-    # arbiter --test 也是纯离线（读知识库 + 读 cross_check 产物），0.3s 级；
-    # 它把画像判定与实测差异配成一条记录，见 python/econ_core/arbiter.py
-    Check("arbiter --test", "python", ["-m", "econ_core.arbiter", "--test"]),
     Check("normalize --test", "python", ["-m", "econ_core.normalize", "--test"]),
     Check("cross_validation --test", "python",
           ["-m", "econ_core.cross_validation", "--test"]),
@@ -142,6 +139,15 @@ CHECKS: list[Check] = [
     Check("compare-unemployment", "python", ["tools/compare-unemployment.py"]),
     # compare-cpi 要跑 NBS 默认指标 + FRED CSV，网络密集型 -> 420s
     Check("compare-cpi", "python", ["tools/compare-cpi.py"], timeout_s=420),
+    # ⚠️ arbiter --test 必须排在 compare-* 之后（曾经排在第 9 项，是个真 bug）。
+    # 它读的是 data/validated/cross_check/*.json —— 那正是上面四个 compare 脚本的产物。
+    # 排在前面时它只能读到**上一次运行**留下的文件，于是：
+    #   * 跨天后目录里有两天的文件 -> 断言「恰好 7 条记录」必挂（实测 13~14 条）；
+    #   * 更糟的是门禁**失败即停**，排在后面的 compare 根本没机会跑，
+    #     于是那次清理永远不会发生 —— 目录一旦脏掉就**再也自愈不了**。
+    # 顺序摆正 + compare 脚本写完后清理同族旧日期（§3.20），两个问题一起消失：
+    # 这次读到的永远是本次运行刚写的那一套，且每族只有一份。
+    Check("arbiter --test", "python", ["-m", "econ_core.arbiter", "--test"]),
     # scan-missing 要跑 NBS 4 次 + WB 2 次 + IMF 2 次 + 默认指标 CPI，也是网络密集型
     # （实测出现过 TimeoutError 重试），与另两项同理放宽到 420s。
     Check("scan-missing", "python", ["tools/scan-missing.py"], timeout_s=420),
