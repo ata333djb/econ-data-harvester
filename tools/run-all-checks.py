@@ -45,6 +45,8 @@
 26. python tools/edh.py list                           （用户 CLI：列出指标，纯离线）
 27. python -m econ_core.fetcher --test                 （取数适配层自检，**联网**）
 28. python tools/edh.py fetch CPI --from 2020 --to 2024 --quiet  （用户 CLI：取数，**联网**）
+29. python -m econ_core.exporter --test                 （导出层自检，**联网**，只写 .exporter-selftest/）
+30. python tools/edh.py export CPI --from 2020 --to 2024 --dry-run  （用户 CLI：导出干跑，**联网**）
 
 约定
 ----
@@ -183,6 +185,18 @@ CHECKS: list[Check] = [
     # `--quiet` 让 stderr 只留一行，失败时门禁打印的 stdout（130 行 CSV）也更好读。
     Check("edh fetch smoke", "python",
           ["tools/edh.py", "fetch", "CPI", "--from", "2020", "--to", "2024", "--quiet"],
+          timeout_s=420),
+    # exporter --test 也是**联网**的（真取 CPI 落盘），验证"fetch 产物 -> validated 层"
+    # 这条此前断开的路：分组 / kb=null 跳过 / 落盘形状与 materialize-validated 一致 /
+    # 覆盖保护（缩水与粒度冲突）。它**只写 .exporter-selftest/**，不碰真的 validated 层 ——
+    # 否则会改变下游数字（现有那条 selftest 残留就让 n_series 从 12 变 13）。
+    Check("exporter --test", "python", ["-m", "econ_core.exporter", "--test"],
+          timeout_s=420),
+    # edh export dry-run 走**用户真敲的那条命令**，且刻意用 --dry-run：
+    # 门禁绝不能改 data/validated/ —— 那会让后面几项（credibility / export / report）
+    # 的数字随"跑过几次门禁"漂移。它覆盖 CLI 参数装配 + 摘要渲染 + 退出码。
+    Check("edh export dry-run", "python",
+          ["tools/edh.py", "export", "CPI", "--from", "2020", "--to", "2024", "--dry-run"],
           timeout_s=420),
 ]
 

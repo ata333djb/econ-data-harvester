@@ -46,6 +46,26 @@
 #   CPI       -> cpi / 消费价格 / consumer price index
 #   INFLATION -> inflation / 通胀 / 通胀率 / 通货膨胀率
 
+# ============================================================================
+# kb_series_key —— 把目录接到知识库（验证链路）上的那根线
+# ============================================================================
+# 本文件的键是 **CPI / GDP / POPULATION**（人话），而 source_profiles.yaml 的键是
+# **nbs|cpi|全国居民消费价格指数（上年=100） (%)**（规范键）。两套键不打通，
+# `source_profiler.profile_series()` 就抛 KeyError —— `kb_series_key` 就是这条映射：
+# 每个源条目（含 variants）声明自己在知识库里的规范键。
+#
+# 规则：
+#   * **null = 知识库没有对应条目**，不是"还没填"。`edh export` 会跳过这些行并报出来。
+#     不是所有目录指标都需要进知识库 —— 只有要做画像/判定/评分的才需要（知识库是人工编纂的，§2.8）
+#   * **只有"同一个源 + 同一个统计口径"才算对上**。反例：NBS 是「上年=100」的年度指数，
+#     World Bank 是「2010=100」的指数 —— 都叫 CPI 但不是同一条序列，故 WB 那行为 null
+#   * 知识库里 **3 个条目在目录里没有对应项**：`nbs|cpi|城市…`、`nbs|cpi|农村…`
+#     （目录只收了全国口径的 CPI）—— 它们暂时无法从 `edh` 侧落盘
+#
+# 覆盖率（2026-09-28 实测）：51 条源映射 + 6 个 variant = **57 处**，
+# 其中 **12 处映射到知识库**（GDP×3、GDP_GROWTH×2、CPI×3、INFLATION×1、
+# UNEMPLOYMENT×3 含 registered variant），45 处为 null。
+
 meta:
   name: EconDataHarvester 指标目录
   version: 1
@@ -79,6 +99,7 @@ indicators:
     frequency: [annual]
     sources:
       nbs:
+        kb_series_key: "nbs|gdp|cny_100m"
         series_name: "国内生产总值 (亿元)"
         cid: f7fd25aaad184414875632cf2327da60
         indicator_id: 7dc6a2ee6c614960b7059991e0cc4d96
@@ -86,14 +107,17 @@ indicators:
         frequency: annual
         unit: 亿元
       worldbank:
+        kb_series_key: "worldbank|NY.GDP.MKTP.CN"
         indicator_code: NY.GDP.MKTP.CN
         country: CHN
         unit: 现价本币（元）
       imf:
+        kb_series_key: "imf|NGDPD"
         indicator_code: NGDPD
         country: CHN
         unit: 十亿美元
       fred:
+        kb_series_key: null
         series_id: MKTGDPCNA646NWDB
         unit: 现价美元
 
@@ -105,6 +129,7 @@ indicators:
     frequency: [annual]
     sources:
       nbs:
+        kb_series_key: "nbs|gdp|index_prev_year_100"
         series_name: "国内生产总值指数 (上年=100)"
         cid: 489888799f8d470786bc01a4057efc38
         indicator_id: 93dd15c8a3a3400ea89f8dceec7ab2b3
@@ -113,10 +138,12 @@ indicators:
         unit: 指数（上年=100）
         notes: 这是**指数**，减 100 才是百分比增速；不要和 IMF 的百分数直接比。
       worldbank:
+        kb_series_key: null
         indicator_code: NY.GDP.MKTP.KD.ZG
         country: CHN
         unit: "%"
       imf:
+        kb_series_key: "imf|NGDP_RPCH"
         indicator_code: NGDP_RPCH
         country: CHN
         unit: "%"
@@ -129,6 +156,7 @@ indicators:
     frequency: [annual]
     sources:
       nbs:
+        kb_series_key: null
         series_name: "人均国内生产总值 (元)"
         cid: f7fd25aaad184414875632cf2327da60
         indicator_id: eb4d93f19d57495c89f98875e03e01be
@@ -136,10 +164,12 @@ indicators:
         frequency: annual
         unit: 元
       worldbank:
+        kb_series_key: null
         indicator_code: NY.GDP.PCAP.CD
         country: CHN
         unit: 现价美元
       imf:
+        kb_series_key: null
         indicator_code: NGDPDPC
         country: CHN
         unit: 现价美元
@@ -152,6 +182,7 @@ indicators:
     frequency: [monthly, annual]
     sources:
       nbs:
+        kb_series_key: "nbs|cpi|全国居民消费价格指数（上年=100） (%)"
         series_name: "居民消费价格指数 (上年=100)"
         cid: e5f37eced5de4d4c815f7ac5f59fc6c2
         indicator_id: 5e3053f110074dcdbcfa3c8428dd1367
@@ -160,6 +191,7 @@ indicators:
         unit: 指数（上年=100）
         variants:
           - variant: monthly
+            kb_series_key: null
             series_name: "居民消费价格指数 (上年同月=100)"
             cid: 5c7452825c7c4dcba391db5ca7f335c5
             indicator_id: 53180dfb9c14411ba4b762307c85920c
@@ -171,20 +203,24 @@ indicators:
               更早的年份在相邻的兄弟节点里（2021-2025 / 2016-2020 / -2015），
               抓长历史要自己按年份拼接 —— 这是 NBS 树的分段结构，不是缺数据。
       worldbank:
+        kb_series_key: null
         indicator_code: FP.CPI.TOTL
         country: CHN
         unit: 指数（2010=100）
       fred:
+        kb_series_key: "fred|CHNCPIALLMINMEI"
         series_id: CHNCPIALLMINMEI
         unit: 指数（2015=100，月度）
         notes: 月度指数，本项目既有链路会聚合到年均值。
       bis:
+        kb_series_key: "bis|WS_LONG_CPI|M.CN.628"
         dataset: WS_LONG_CPI
         key: M.CN.628
         unit: 指数（2010=100，月度）
         notes: BIS 转载 NBS 并重定基，**不是独立编制**（PROJECT_STATE §3.10），月度覆盖到 1995-01。
         variants:
           - variant: annual
+            kb_series_key: null
             dataset: WS_LONG_CPI
             key: A.CN.771
             frequency: annual
@@ -199,17 +235,21 @@ indicators:
     frequency: [monthly, annual]
     sources:
       worldbank:
+        kb_series_key: null
         indicator_code: FP.CPI.TOTL.ZG
         country: CHN
         unit: "%"
       imf:
+        kb_series_key: null
         indicator_code: PCPIPCH
         country: CHN
         unit: "%（年平均变动）"
       fred:
+        kb_series_key: null
         series_id: CPALTT01CNM659N
         unit: "%（月度同比）"
       bis:
+        kb_series_key: "bis|WS_LONG_CPI|M.CN.771"
         dataset: WS_LONG_CPI
         key: M.CN.771
         unit: "%（同比）"
@@ -223,6 +263,7 @@ indicators:
     frequency: [monthly, annual]
     sources:
       nbs:
+        kb_series_key: "nbs|surveyed_unemployment"
         series_name: "全国城镇调查失业率 (%)"
         cid: ee3b7046b390415b9b7745e3d16f6052
         indicator_id: 3888eac6062945a79c8a27e5f13d4953
@@ -232,6 +273,7 @@ indicators:
         notes: 只在**月度树**里，实测 2018-01 起有数据（请求 2017 也只回 2018+）。
         variants:
           - variant: registered
+            kb_series_key: "nbs|registered_unemployment"
             series_name: "城镇登记失业率 (%)"
             cid: 19839dbd8e82481b9524f031c6d816c5
             indicator_id: 456ef2f3d75f472b930384237bc6100f
@@ -242,16 +284,19 @@ indicators:
               **口径完全不同**（行政记录 vs 抽样调查），不能和调查失业率混用或拼接；
               且 NBS 自 2022 起不再更新（节点还在但值为空串）。列在这里只为可发现性。
       worldbank:
+        kb_series_key: null
         indicator_code: SL.UEM.TOTL.ZS
         country: CHN
         unit: "%（ILO 估算）"
         notes: 是 ILO 建模估算值，不是 NBS 调查值，口径有差。
       imf:
+        kb_series_key: "imf|LUR"
         indicator_code: LUR
         country: CHN
         unit: "%"
         notes: 起点 2017；含预测值，实际值要自己截年份。
       fred:
+        kb_series_key: null
         series_id: LRUNTTTTCHA156S
         unit: "%（OECD 口径）"
         notes: 实测只有 2010-2025 共 16 期。
@@ -264,6 +309,7 @@ indicators:
     frequency: [annual]
     sources:
       nbs:
+        kb_series_key: null
         series_name: "年末总人口 (万人)"
         cid: 6331ad868e8b4f55b8e9b6e765609ce1
         indicator_id: 806083491dbe46a08995783945a30b9d
@@ -271,14 +317,17 @@ indicators:
         frequency: annual
         unit: 万人
       worldbank:
+        kb_series_key: null
         indicator_code: SP.POP.TOTL
         country: CHN
         unit: 人
       imf:
+        kb_series_key: null
         indicator_code: LP
         country: CHN
         unit: 百万人
       fred:
+        kb_series_key: null
         series_id: POPTOTCHA647NWDB
         unit: 人
 
@@ -290,6 +339,7 @@ indicators:
     frequency: [annual]
     sources:
       nbs:
+        kb_series_key: null
         series_name: "进出口差额 (人民币) (亿元)"
         cid: 333332810f574043bc40553902c2f385
         indicator_id: d277c986002b459b9c551499dd0a309d
@@ -298,6 +348,7 @@ indicators:
         unit: 亿元
         notes: 同组还有「(美元) (百万美元)」版本；也有月度「进出口差额当期值 (千美元)」。
       worldbank:
+        kb_series_key: null
         indicator_code: NE.RSB.GNFS.CD
         country: CHN
         unit: 现价美元
@@ -311,6 +362,7 @@ indicators:
     frequency: [annual, monthly]
     sources:
       nbs:
+        kb_series_key: null
         series_name: "出口总额 (人民币) (亿元)"
         cid: 333332810f574043bc40553902c2f385
         indicator_id: 3529a0abf1324839942a3ec3a7059bcc
@@ -319,6 +371,7 @@ indicators:
         unit: 亿元
         variants:
           - variant: monthly
+            kb_series_key: null
             series_name: "出口总值当期值 (千美元)"
             cid: 7e11b47c828d4e4e925f1c5a98305558
             indicator_id: 9e38b39f55a7461ea195508c1bb7dbdc
@@ -326,11 +379,13 @@ indicators:
             frequency: monthly
             unit: 千美元
       worldbank:
+        kb_series_key: null
         indicator_code: NE.EXP.GNFS.CD
         country: CHN
         unit: 现价美元
         notes: 货物和服务出口（BPM6），口径比 NBS 的货物出口宽。
       fred:
+        kb_series_key: null
         series_id: XTEXVA01CNM667S
         unit: 美元（月度）
         notes: OECD MEI 镜像，实测 1992-01 起。
@@ -343,6 +398,7 @@ indicators:
     frequency: [annual, monthly]
     sources:
       nbs:
+        kb_series_key: null
         series_name: "进口总额 (人民币) (亿元)"
         cid: 333332810f574043bc40553902c2f385
         indicator_id: 752ae251a0494227b593779a098417c7
@@ -351,6 +407,7 @@ indicators:
         unit: 亿元
         variants:
           - variant: monthly
+            kb_series_key: null
             series_name: "进口总值当期值 (千美元)"
             cid: 7e11b47c828d4e4e925f1c5a98305558
             indicator_id: 86a340fee806409ebdf4d0069bd23f29
@@ -358,10 +415,12 @@ indicators:
             frequency: monthly
             unit: 千美元
       worldbank:
+        kb_series_key: null
         indicator_code: NE.IMP.GNFS.CD
         country: CHN
         unit: 现价美元
       fred:
+        kb_series_key: null
         series_id: XTIMVA01CNM667S
         unit: 美元（月度）
         notes: OECD MEI 镜像。
@@ -374,6 +433,7 @@ indicators:
     frequency: [monthly, annual]
     sources:
       nbs:
+        kb_series_key: null
         series_name: "实际利用外商直接投资金额累计值 (百万美元)"
         cid: aea8dbdf934e4b6ea154e679c8d4a0e9
         indicator_id: d21fa5bc9975422aaf076bf2e525269d
@@ -386,10 +446,12 @@ indicators:
           2020-01 起全部是占位行（dt_name 有值、v 为空串），末值 124394（2019年11月）。
           证据 data/raw/_probe_catalog/diag_range.json。
       worldbank:
+        kb_series_key: null
         indicator_code: BX.KLT.DINV.CD.WD
         country: CHN
         unit: 现价美元
       imf:
+        kb_series_key: null
         indicator_code: DirectIn
         country: CHN
         unit: 百万美元
@@ -403,6 +465,7 @@ indicators:
     frequency: [annual, monthly]
     sources:
       nbs:
+        kb_series_key: null
         series_name: "货币和准货币 (M2) 供应量 (亿元)"
         cid: b4654f05bda2472a9acf7488086971c3
         indicator_id: f7fe1af1ef3c4046a62fefd5f0c2be6b
@@ -410,10 +473,12 @@ indicators:
         frequency: annual
         unit: 亿元
       worldbank:
+        kb_series_key: null
         indicator_code: FM.LBL.BMNY.CN
         country: CHN
         unit: 现价本币
       fred:
+        kb_series_key: null
         series_id: MYAGM2CNM189N
         unit: 本币（月度）
         data_until: "2019-08"
@@ -427,6 +492,7 @@ indicators:
     frequency: [monthly]
     sources:
       nbs:
+        kb_series_key: null
         series_name: "规上工业增加值同比增长 (%)"
         cid: 3f2e14f0542348ed9fe02476eca3450b
         indicator_id: ef1b1765960d45a29b4d7c4ca91be916
@@ -437,6 +503,7 @@ indicators:
           实测 2014-03..2026-08 有 126 个非空期。**每年 1 月没有值**（占位行）——
           NBS 1-2 月合并发布，这是发布制度不是缺数据。
       worldbank:
+        kb_series_key: null
         indicator_code: NV.IND.TOTL.ZS
         country: CHN
         unit: "% of GDP"
@@ -450,6 +517,7 @@ indicators:
     frequency: [monthly]
     sources:
       nbs:
+        kb_series_key: null
         series_name: "社会消费品零售总额当期值 (亿元)"
         cid: d0cb882c7f27443ab6b3ef9421901961
         indicator_id: 1142a3a03e9045959e606a21822641ac
@@ -461,6 +529,7 @@ indicators:
           同组还有「累计值 (亿元)」与「同比增长 (%)」。
         variants:
           - variant: cumulative
+            kb_series_key: null
             series_name: "社会消费品零售总额累计值 (亿元)"
             cid: d0cb882c7f27443ab6b3ef9421901961
             indicator_id: 260a1794443b43dd93a59928b12f38af
@@ -480,6 +549,7 @@ indicators:
     frequency: [annual]
     sources:
       nbs:
+        kb_series_key: null
         series_name: "全社会固定资产投资 (亿元)"
         cid: 607a7cd4b50e4553894472475d1f4273
         indicator_id: ba8a0fbdae644f44be836143bbc63f4e
@@ -488,6 +558,7 @@ indicators:
         unit: 亿元
         notes: 同组还有「比上年增长 (%)」。
       worldbank:
+        kb_series_key: null
         indicator_code: NE.GDI.FTOT.CN
         country: CHN
         unit: 现价本币
@@ -501,6 +572,7 @@ indicators:
     frequency: [annual, monthly]
     sources:
       nbs:
+        kb_series_key: null
         series_name: "外汇储备 (亿美元)"
         cid: 09ac2b6323854202bdd7e6baffcf7222
         indicator_id: 90b9649778434698a8ccabd35a895a8f
@@ -508,11 +580,13 @@ indicators:
         frequency: annual
         unit: 亿美元
       worldbank:
+        kb_series_key: null
         indicator_code: FI.RES.TOTL.CD
         country: CHN
         unit: 现价美元
         notes: 含黄金，口径比 NBS 的外汇储备宽。
       fred:
+        kb_series_key: null
         series_id: TRESEGCNM052N
         unit: 美元（月度）
         notes: IMF IFS 镜像，**月度**且实测 1977-12 起 583 期，是这几条里覆盖最长的。
@@ -531,6 +605,7 @@ indicators:
       所以这个指标**只有 IMF 一个源** —— 单源即无法在本项目内做交叉验证。
     sources:
       imf:
+        kb_series_key: null
         indicator_code: GGXWDG_NGDP
         country: CHN
         unit: "% of GDP"
@@ -544,6 +619,7 @@ indicators:
     frequency: [annual]
     sources:
       nbs:
+        kb_series_key: null
         series_name: "人民币对美元汇率 (美元=100) (元)"
         cid: 844094d7c9b842f8b84b2e7aebbaf97d
         indicator_id: cd3b99ca016e4e0b94cd4c5647228df6
@@ -554,6 +630,7 @@ indicators:
           **注意量纲是「美元=100」**，即 2015 年 622.84 元/100 美元。
           换算成常见的「元/1 美元」要除以 100。同组还有对日元/港元/欧元。
       worldbank:
+        kb_series_key: null
         indicator_code: PA.NUS.FCRF
         country: CHN
         unit: 本币/美元（期间平均）

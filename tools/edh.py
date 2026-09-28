@@ -56,8 +56,9 @@ from typing import Any, Optional, Sequence
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "python"))
 
-from econ_core import catalog, fetcher  # noqa: E402
+from econ_core import catalog, exporter, fetcher  # noqa: E402
 from econ_core.catalog import CatalogError  # noqa: E402
+from econ_core.exporter import ExporterError  # noqa: E402
 from econ_core.fetcher import ROW_FIELDS  # noqa: E402
 
 #: 源的中文标签（只用于显示，机器可读的键仍是英文）
@@ -406,6 +407,99 @@ def cmd_fetch(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# edh export
+# --------------------------------------------------------------------------- #
+
+def cmd_export(args: argparse.Namespace) -> int:
+    """`edh export NAME...`：取数 -> 落 validated 层 ->（可选）触发画像。
+
+    与 `edh fetch` 的区别：`fetch` 把数据**给用户**（stdout），`export` 把它
+    **交给系统**（写进 `data/validated/`，让画像/判定/评分/报告看得见）。
+    """
+    # 先把所有指标名解析一遍：名字打错就整体退出，不要取了一半才发现
+    resolved: list[str] = []
+    for raw in args.names:
+        try:
+            resolved.append(catalog.get_indicator(raw)["name"])
+        except CatalogError as exc:
+            print(f"错误: {exc}", file=sys.stderr)
+            return 2
+
+    kwargs: dict[str, Any] = {
+        "region": args.region,
+        "from_year": args.from_year,
+        "to_year": args.to_year,
+        "frequency": args.frequency,
+        "dry_run": args.dry_run,
+        "force": args.force,
+    }
+    if args.source:
+        kwargs["source"] = args.source
+
+    all_written: list[dict[str, Any]] = []
+    all_skipped: list[dict[str, Any]] = []
+    all_unmapped: list[dict[str, Any]] = []
+    failures: list[str] = []
+
+    for ind in resolved:
+        try:
+            rep = exporter.export_indicator(ind, **kwargs)
+        except (KeyError, fetcher.FetcherError, ExporterError) as exc:
+            print(f"错误: {ind}: {exc}", file=sys.stderr)
+            failures.append(ind)
+            continue
+        all_written.extend(rep["written"])
+        all_skipped.extend(rep["skipped"])
+        all_unmapped.extend(rep["unmapped"])
+
+    # ---- 摘要（stdout；--quiet 只留最后一行）----
+    if not args.quiet:
+        print(f"edh export —— {'试运行（不写文件）' if args.dry_run else '落盘到 validated 层'}")
+        print(_rule())
+        for e in all_written:
+            mark = "将写入" if e.get("action") == "would-write" else "已写入"
+            grid = f"  网格 {e['grid_n']} 期" if e.get("grid_n") is not None else ""
+            print(f"  [{mark}] {e['source']:<10} {e['series_key']}")
+            print(f"           {e['n_rows']} 行  {e.get('periods','')}{grid}"
+                  + (f"  -> {e.get('path')}" if e.get("path") else ""))
+        for s in all_skipped:
+            print(f"  [跳过] {s['source']:<10} {s['series_key']}")
+            print(f"           {s['detail']}")
+        if all_unmapped:
+            print(f"  [无知识库条目] {len(all_unmapped)} 条源序列未落盘：")
+            for u in all_unmapped:
+                print(f"           {u['indicator']}.{u['source']}  {u['n_rows']} 行"
+                      f"  （kb_series_key=null）")
+
+    n_new = sum(1 for e in all_written if e.get("action") == "written")
+    n_plan = sum(1 for e in all_written if e.get("action") == "would-write")
+    n_rows = sum(e["n_rows"] for e in all_written)
+    verb = "将写入" if args.dry_run else "已写入"
+    print(f"合计：{verb} {n_new or n_plan} 个文件 / {n_rows} 行；"
+          f"跳过 {len(all_skipped)} 个；无知识库条目 {len(all_unmapped)} 条"
+          + (f"；失败 {len(failures)} 个指标" if failures else ""))
+
+    # ---- --refresh：确认画像层读得到 ----
+    if args.refresh and not args.dry_run:
+        keys = [e["series_key"] for e in all_written if e.get("action") == "written"]
+        print()
+        print("--refresh：确认画像层（source_profiler）能读到新序列")
+        results = exporter.refresh_profiles(keys)
+        for r in results:
+            if r["ok"]:
+                print(f"  [画像可用] {r['series_key']}")
+                print(f"             {r.get('display_name')}  发布方={r.get('publisher')}")
+            else:
+                print(f"  [画像不可用] {r['series_key']}: {r['error']}", file=sys.stderr)
+        ok_n = sum(1 for r in results if r["ok"])
+        print(f"  画像可用 {ok_n}/{len(results)}")
+        if ok_n != len(results):
+            return 1
+
+    return 1 if failures else 0
+
+
+# --------------------------------------------------------------------------- #
 # main
 # --------------------------------------------------------------------------- #
 
@@ -455,6 +549,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_fetch.add_argument("--allow-forecast", action="store_true",
                          help="保留 IMF 的预测年份（默认截到今年）")
     p_fetch.set_defaults(func=cmd_fetch)
+
+    p_exp = sub.add_parser(
+        "export", help="取数并落进 validated 层（接上画像/判定/评分/报告链路）",
+        epilog="可以给多个指标（`edh export GDP CPI M2`）。落盘形状与 "
+               "materialize-validated.py 一致；`kb_series_key=null` 的源不落盘。")
+    p_exp.add_argument("names", nargs="+", help="一个或多个指标名")
+    p_exp.add_argument("--region", default="CHN", help="地区代码，默认 CHN")
+    p_exp.add_argument("--source", default=None,
+                       help=f"只导一个源（{', '.join(catalog.SOURCES)}）")
+    p_exp.add_argument("--from", dest="from_year", type=int, default=None,
+                       help="起始年（含），如 2020")
+    p_exp.add_argument("--to", dest="to_year", type=int, default=None,
+                       help="结束年（含），如 2024")
+    p_exp.add_argument("--frequency", default=None, choices=["annual", "monthly"],
+                       help="annual=月度行按年均值年化；monthly=只保留原生月度源")
+    p_exp.add_argument("--dry-run", action="store_true", help="只显示会写什么，不真写")
+    p_exp.add_argument("--force", action="store_true",
+                       help="允许用更窄的窗口覆盖已有（更宽）的序列 —— 默认拒绝，防止缩水")
+    p_exp.add_argument("--refresh", action="store_true",
+                       help="落盘后跑一次 source_profiler，确认画像层读得到")
+    p_exp.add_argument("--quiet", action="store_true", help="只输出合计那一行")
+    p_exp.set_defaults(func=cmd_export)
     return parser
 
 

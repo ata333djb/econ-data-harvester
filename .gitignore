@@ -45,3 +45,4 @@ __pycache__/
 
 # 打包产物：只打 zip 分发，不进 git
 dist/
+.exporter-selftest/
