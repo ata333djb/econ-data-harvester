@@ -16,7 +16,7 @@
 
 权威性顺序（冲突时以序号小的为准）：
 
-1. 门禁 tools/run-all-checks.py 的**实际输出**（当前应为 24/24 PASS）——这是唯一硬标准
+1. 门禁 tools/run-all-checks.py 的**实际输出**（当前应为 28/28 PASS）——这是唯一硬标准
 2. 本文件
 3. 各模块 docstring —— 细节、实测证据、踩坑经过都写在那里
 
@@ -61,12 +61,19 @@
 - 清单是**人工编纂 + 机器验证**：每条映射都由 `python/_probes/probe_catalog_sources.py`
   真跑过取数（§2.13、§3.15）
 
+**打包与分发层**（方向 F，让"用户电脑上不装 Python 也能用"）：`dist/`（`edh.bat` + 内嵌
+Python 3.12.7/PyYAML + 同一份 `econ_core` 源码 + `examples/` + 非技术用户 `README.md`；
+**不进 git，只打 zip** —— §2.15 / `PACKAGING.md`）；三个构建脚本：`tools/analyze-deps.py`
+（AST 量 import 闭包，实测只需 PyYAML）、`tools/download.py`（走 OpenSSL 栈，§2.1 唯一能通的方式）、
+`tools/make-dist-zip.py`（白名单 + 正斜杠，§3.19）
+
 **工具与输出层**（`tools/`）：`compare-{gdp,gdp-3way,gdp-real,unemployment,cpi}.py`（五条交叉验证）·
 `splice-cpi.py`（真实拼接 + 三模式对比）· `smoke-{nbs,worldbank,imf,fred,bis}-adapter.mjs` ·
 `export.py`（-> CSV + SQLite + 数据字典）· `report.py`（-> 单文件 HTML）·
 `src/plugins/hello.js`（最小宿主插件，只证明装配链路可激活）
 
-**文档**：`python/econ_core/README.md`（生产层已知上游事实）· `python/_probes/README.md`
+**文档**：`PROJECT_STATE.md`（本文件，全局状态快照）· `PACKAGING.md`（打包/分发：怎么重建、
+当前卡在哪）· `python/econ_core/README.md`（生产层已知上游事实）· `python/_probes/README.md`
 （探测脚本索引 + 四源独立性判定，§3.10）
 
 ### 1.2 门禁：28 项（tools/run-all-checks.py，当前 28/28 PASS）
@@ -164,9 +171,8 @@ PyInstaller —— 改代码只改 `.py`、用户不用重下，也没有杀软�
 - **干净环境测试（7 步全过）**：解压到 `D:\tmp\edh-test` -> `edh.bat list`（18 指标，exit 0）
   -> `info CPI`（exit 0）-> `fetch CPI --from 2020 --to 2024 --output test.csv`（exit 0）
   -> CSV 131 行 / BOM `EF BB BF` / 中文完整 -> `report.html` 0 个外部 `src=`（全内联）
-- **本轮抓到 3 个"只有真跑一遍才会暴露"的问题**（§3.19）：`http_client` 的 venv 守卫
-  让 `fetch` 在用户包里**完全不可用**；控制台码页 936 与 UTF-8 输出不匹配导致中文全花；
-  `.bat` 里写中文会被 cmd 按码页读成乱码并当成命令执行
+- **本轮抓到 3 个"只有真跑一遍才会暴露"的问题**（逐条 + 证据见 §3.19）：venv 守卫让
+  `fetch` 在用户包里完全不可用；控制台码页与 UTF-8 不匹配导致中文全花；`.bat` 写中文被 cmd 当命令执行
 
 ### 1.5 更早几轮（压缩存档）
 
@@ -181,12 +187,11 @@ PyInstaller —— 改代码只改 `.py`、用户不用重下，也没有杀软�
   门禁 24 -> 26。51 条映射**逐条真跑过取数**，另有 3 条"探过、确认对中国取不到数据"留痕未收录。
   当轮踩的坑见 §3.15-3.17
 
-
 - **方向 C 第五轮（rebase）**：`splicer.rebase()` 的 `ratio`/`difference` 两模式 + `splice(rebase=...)`；
-  自检 46 -> 58 项。**关键结论：rebase 只调水平不调斜率，对当前 CPI 用例无效** ——
-  触发「需桥接」的是 `trend_break`（magnitude 1.3590）不是 `level_jump`（excess_ratio 0.3378 本判 ok）；
-  且 NBS 完全落在 BIS 跨度内 -> `applied=False`（`not_applied_reason: no_non_overlap`），
-  故三模式 verdict 相同**不构成**"rebase 无效"的证据。当轮修掉 5 个 bug（§5.4 留两条）
+  自检 46 -> 58 项。**关键结论：rebase 只调水平不调斜率，对当前 CPI 用例无效** —— 触发「需桥接」
+  的是 `trend_break`（magnitude 1.3590）不是 `level_jump`（excess_ratio 0.3378 本判 ok）；且 NBS
+  完全落在 BIS 跨度内 -> `applied=False`（`no_non_overlap`），故三模式 verdict 相同**不构成**
+  "rebase 无效"的证据。当轮修掉 5 个 bug（§5.4 留两条）
 
 - **方向 C 第四轮**：修 `http_client` 大小写缺陷（§3.13 闭环，顺带修掉一处 `KeyError`）；
   BIS 两条接进声明式清单打通 validated -> processed -> 导出（152 -> **900 行**）；
@@ -572,25 +577,19 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
 
 ### 3.19 ⚠️ 打包的三个坑：只有"真解压出来跑一遍"才会暴露
 
-三个问题在开发目录里**全部看不出来** —— 因为开发目录有 `.venv`、有这个控制台、
-有 Compress-Archive 的 Windows 容错。干净环境测试（解压到别处再跑）一次全撞出来：
+开发目录里**全部看不出来**（那里有 `.venv`、有这个控制台、有 Compress-Archive 的 Windows
+容错），干净环境测试（解压到别处再跑）一次全撞出来：
 
-- **`http_client` 的 venv 守卫让 `fetch` 在用户包里 100% 失败**。`assert_venv()` 要求
-  解释器是"项目 venv"，而用户包里根本没有 `.venv`，于是 `_venv_python()` 返回 None、
-  每个源都报 `RuntimeError: 本模块必须使用项目 venv 的 Python 运行`，
-  `edh fetch` 退出码 2 且一行数据都没有。修法是 `edh.bat` 设
-  `ECON_HTTP_ALLOW_NON_VENV=1`（http_client 自带、写在 docstring 里的出口），
-  依据是内嵌解释器自带 OpenSSL —— **绕之前先实测 TLS 通不通**，
-  别因为"想让它跑起来"就绕
-- **控制台码页与输出编码不匹配 -> 中文全花**。实测 `chcp` = **936**，而进程写的是
-  **UTF-8**（`PYTHONIOENCODING=utf-8`），于是 `指标目录` 显示成 `鎸囨爣鐩綍`。
-  **管道/重定向时看不出来**（字节是对的，按 UTF-8 解码就正常），只有真控制台才暴露。
-  修法 `chcp 65001` + 结束恢复。验收要**从 936 开始跑**并确认前后都是 936
-- **`Compress-Archive` 写反斜杠路径**。ZIP 规范要求正斜杠；Windows 资源管理器容错，
-  所以本地解压"看着没问题"，但 Python `zipfile`、Linux/macOS `unzip` 会把
-  `embedded-python\python.exe` 当成**一个文件名**。改用 `zipfile` + `as_posix()`
-- 附带：`Encoding.ASCII` 会**静默**把非 ASCII 字符替换成 `?`（拿它把 .bat 归一化时，
-  注释里的中文示例变成了 `"?????"`）。用 ASCII 编码写文件前，确认源文本本来就是 ASCII
+- **venv 守卫让 `fetch` 在用户包里 100% 失败**：`assert_venv()` 要求"项目 venv"，用户包没有
+  `.venv` -> `_venv_python()` 返回 None -> 每个源报 `RuntimeError: 本模块必须使用项目 venv 的
+  Python 运行`、退出码 2、零行数据。修法 `edh.bat` 设 `ECON_HTTP_ALLOW_NON_VENV=1`
+  （http_client docstring 里写明的出口）；依据是内嵌解释器自带 OpenSSL，**绕之前先实测 TLS**
+- **控制台码页与输出编码不匹配 -> 中文全花**：实测 `chcp`=**936** 而进程写 **UTF-8**，
+  `指标目录` 显示成 `鎸囨爣鐩綍`；**管道/重定向时看不出来**（字节是对的）。修法 `chcp 65001`
+  + 结束恢复；验收要**从 936 开始跑**并确认前后都是 936
+- **`Compress-Archive` 写反斜杠路径**：规范要求正斜杠，资源管理器容错所以本地看不出，
+  但 `zipfile` / Linux `unzip` 会把 `embedded-python\python.exe` 当成**一个文件名**
+- 附带：`Encoding.ASCII` **静默**把非 ASCII 换成 `?`；用它写文件前先确认源文本本来就是 ASCII
 
 ## 4. 架构图
 
@@ -608,8 +607,10 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
 
     旁路：source_profiles.yaml + validated 血缘 -> source_profiler -> arbiter -> credibility
     拼接：splicer.py（+ tools/splice-cpi.py）-> data/validated/spliced/
-    产品：catalog_data.yaml -> catalog.py -> tools/edh.py（list / info；fetch 下一轮）
-    横切：tools/run-all-checks.py —— 26 项门禁，任何改动后必跑
+    产品：catalog_data.yaml -> catalog.py -> fetcher.py -> tools/edh.py
+          （list / info / summary / fetch；CSV 到 stdout，**不落 data/ 任何一层**）
+    分发：dist/（内嵌 Python + 同一份 .py 源码）-> econ-data-harvester-v0.2.zip（用户免装 Python）
+    横切：tools/run-all-checks.py —— 28 项门禁，任何改动后必跑
 
 ### 4.2 每层职责与产物
 
@@ -622,10 +623,12 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
 | 拼接 | splicer.py + tools/splice-cpi.py | 两条同指标序列 | `data/validated/spliced/`（结果 + 重叠期 + 断点 + verdict） |
 | 输出 | export.py / report.py | processed | `data/output/`：CSV / SQLite / 字典 / report.html |
 | 画像 | source_profiler + arbiter + credibility | 知识库 + validated + missing_report | 内存画像与落盘报告 |
-| **目录** | catalog.py + catalog_data.yaml + tools/edh.py | 用户输入的指标名 | （无落盘产物）stdout 表格 / JSON；下一轮起 `edh fetch` 走采集层 |
+| **目录** | catalog.py + catalog_data.yaml + fetcher.py + tools/edh.py | 用户输入的指标名 | （无落盘产物）stdout 表格 / JSON；`fetch` 真的走采集层取数 |
+| **分发** | dist/ + tools/{analyze-deps,download,make-dist-zip}.py | 项目源码 | `dist/econ-data-harvester-v0.2.zip`（用户无需装 Python）—— §2.15 / PACKAGING.md |
 
-**目录层在整条链的入口**：它不生产数据，只把「指标名」翻译成「哪一层、什么参数」。
-`fetch` 做出来之后，链路是 目录 -> 采集 -> 规范化 -> …；目录层自己**不碰** data/ 任何一层。
+**目录层是整条链的入口**（只翻译、不生产）：`fetch` 已打通 目录 -> 采集 -> 规范化，但
+**目录层自己不碰 data/** —— 产物只给用户（stdout / `--output`），**不落盘**（§5.3①）。
+**分发层是出口形态**（无新逻辑，同一份 `.py` + 内嵌 Python 打包）；**改了 `.py` 就要重打 zip**（§2.15）
 
 **拼接层的位置**：语义上在 validated 之后、processed 之前，但**本轮刻意不接进 processed**
 （`fill_strategy` 不认识拼接产物，硬接要动它的扫描规则）。拼接产物落在 `data/validated/spliced/`，
@@ -657,23 +660,27 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
 
 ### 5.3 待办（按优先级）
 
-- **① 方向 E 第三轮：`edh export` / 落盘（高，本轮的直接续作）** —— 现在 `edh fetch`
+- **① 方向 G：`edh export` / 落盘（高）** —— 现在 `edh fetch`
   只把数据**打给用户**（stdout / `--output`），**不落任何一层** data/。两条路：
   ① 让产物进 `data/validated/`（要解决**命名冲突**：目录的 `CPI` vs 知识库的
   `nbs|cpi|全国居民消费价格指数（上年=100） (%)` 是两套键，得定映射规则，否则
   `source_profiler` 会因查不到 key 抛 KeyError）；
   ② 保持轻量，只加 `--format parquet` / 多指标批量取数（`edh fetch GDP CPI M2`）。
   **倾向前者** —— 它才把"用户产品"和既有的验证/画像/报告链路接上
-- **② 多指标批量取数（中）** —— 目录能查 18 个指标，但 `edh fetch` 一次只取一个。
+- **② 分发包收尾（中）** —— 打包（方向 F）已结项、zip 已验证可用，只剩 4 件小事，
+  **清单在 `PACKAGING.md` §4，本文件不重复维护**。要点：pip 没装进内嵌 Python（低优先级，
+  核心功能不依赖）；`examples/` 与 `report.html` 自述差 2 个文件；LICENSE 署名待实名；
+  打包工具刻意没进门禁
+- **③ 多指标批量取数（中）** —— 目录能查 18 个指标，但 `edh fetch` 一次只取一个。
   批量要先定"多指标的 CSV 怎么合"（`indicator` 列已在，主要是窗口/频率取交集的问题）
-- **③ 拼接产物进 processed / 导出（中）** —— 现在只到 `data/validated/spliced/`。要进导出链路，
+- **④ 拼接产物进 processed / 导出（中）** —— 现在只到 `data/validated/spliced/`。要进导出链路，
   得先让 `fill_strategy` 认识拼接产物（它现在只认 `rows` 长表）
-- **④ `RELATIVE_METRIC_FLOOR` 按量纲配置（低）** —— 见 §5.4，0.5 只适配百分点量纲
-- **⑤ ICP 2021 单独立项** —— CPI 维度已证不可达（§3.10），但**价格水平**维度的独立测量存在：
+- **⑤ `RELATIVE_METRIC_FLOOR` 按量纲配置（低）** —— 见 §5.4，0.5 只适配百分点量纲
+- **⑥ ICP 2021 单独立项** —— CPI 维度已证不可达（§3.10），但**价格水平**维度的独立测量存在：
   世界银行 ICP 是各经济体**自己采集**一篮子代表品，2021 轮中国**参加了**（NBS 2024-05 自行发布过结果）。
   可用它验 PWT 的 `pl_gdpo` 或 OECD `DF_TABLE4` 的中国 PPP —— 一方官方采集、一方多边化处理，
   这才是真交叉验证。**立项前需先解 §3.11 的 TLS 证书链**（PWT 侧）
-- **⑥ `GOVERNMENT_DEBT` 只有单源，无法交叉验证（低）** —— 目录实测 NBS 无此指标、
+- **⑦ `GOVERNMENT_DEBT` 只有单源，无法交叉验证（低）** —— 目录实测 NBS 无此指标、
   World Bank 对中国全 null，只剩 IMF `GGXWDG_NGDP`。要做交叉验证得引新源（BIS 债务证券？
   财政部？），本轮范围外，先记着
 - **方向 C 已完成五轮**（全部结项）：① FRED CPI ② 加独立源 -> 探测判定**不可达，勿重开**
@@ -745,12 +752,11 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
 - **项目根**：`package.json`（声明 `type: module`，使 .mjs/.js 插件按 ESM 加载，**不要删**）·
   `LICENSE`（MIT，方向 F 新增；另附数据许可说明）·
   `pip_sandbox_install.py` + `.gitignore`（忽略 .venv/.tools/node_modules、data 下五个子目录、**dist/**）
-- **`dist/`（不进 git，只打 zip）**：`edh.bat`（**纯 ASCII**，设 PYTHONPATH /
-  ECON_HTTP_ALLOW_NON_VENV / chcp 65001，§2.15）· `embedded-python/`（Python 3.12.7
-  embeddable + PyYAML 6.0.3）· `python/econ_core/` · `tools/edh.py` ·
-  `examples/{report.html,econ_data.csv,data_dictionary.md}` · `README.md`（面向非技术用户）·
-  `LICENSE` · `econ-data-harvester-v0.2.zip`（12.5 MB）。
-  **`dist/.build/` 与 `dist/.tmp/` 是构建脚手架，不进 zip**
+- **`dist/`（不进 git，只打 zip）**：`edh.bat`（**纯 ASCII**；设 PYTHONPATH /
+  ECON_HTTP_ALLOW_NON_VENV / chcp 65001，§2.15）· `embedded-python/`（3.12.7 + PyYAML 6.0.3）·
+  `python/econ_core/` · `tools/edh.py` · `examples/{report.html,econ_data.csv,data_dictionary.md}` ·
+  `README.md`（非技术用户）· `LICENSE` · `econ-data-harvester-v0.2.zip`（12.5 MB）。
+  **`.build/` 与 `.tmp/` 是构建脚手架，不进 zip**
 
 ---
 
