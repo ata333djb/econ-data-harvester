@@ -1,0 +1,42 @@
+# NOTICE
+
+## Data is not covered by the MIT licence
+
+`LICENSE` covers the **code** in this repository. It does not cover any data
+the program fetches at runtime. That data belongs to its publishers and
+carries its own terms:
+
+| Source | Terms |
+|---|---|
+| National Bureau of Statistics (NBS, 国家统计局) | Chinese government data; use per the notice on its own site |
+| World Bank Open Data | CC BY 4.0 |
+| IMF DataMapper / WEO | IMF copyright; attribution required |
+| FRED (Federal Reserve Bank of St. Louis) | Each series belongs to its original publisher; FRED only redistributes |
+| BIS | Redistributes national official statistics under BIS copyright |
+
+**Check these terms before redistributing anything harvested by this tool.**
+Running the tool and using the output for your own analysis is one thing;
+republishing a merged dataset is another.
+
+The `examples/` folder in the distributable zip contains data snapshots taken
+during development. They are covered by the terms above, not by MIT.
+
+## Why this file exists separately
+
+GitHub detects a project's licence by parsing `LICENSE`. Appending non-licence
+text to that file makes the detection fail and the repository shows up as
+"NOASSERTION" instead of "MIT". Keeping the data note here keeps both facts
+true at once: the code is unambiguously MIT, and the data caveat is still
+stated in the repository.
+
+## Third-party components
+
+The install-free zip built by `tools/make-dist-zip.py` bundles:
+
+- **CPython 3.12.7** (Python Software Foundation License) — the embeddable
+  Windows distribution from python.org
+- **PyYAML 6.0.3** (MIT)
+- **pip 26.2.1** (MIT)
+
+Everything else in `python/econ_core/` is this project's own code, and the
+HTTP layer uses only the Python standard library.
