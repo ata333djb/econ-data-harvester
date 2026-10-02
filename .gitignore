@@ -20,14 +20,14 @@ node-compile-cache/
 # Harvest outputs: the directories are tracked, their contents are not.
 # Ignoring a directory's CONTENTS (rather than the directory) is what lets the
 # .gitkeep files below be re-included and keeps the folder layout in the repo.
+# Everything is written under data/output/ -- there is deliberately no
+# top-level output/ directory any more (it was a legacy path nothing wrote to).
 data/raw/*
 data/parsed/*
 data/validated/*
 data/processed/*
 data/output/*
-output/*
 !data/**/.gitkeep
-!output/.gitkeep
 
 # Packaging output: the distributable is a zip, not a tracked tree
 dist/

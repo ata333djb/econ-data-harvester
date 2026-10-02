@@ -411,11 +411,14 @@ indicator_id 必须 != tree_node_id；**R11（关键）**：command 含 fetch �
 （`\ / : * ? " < > |` 与控制符），**保留中文**（`exporter.py` 沿用同一规则）。
 自我验证：`fill_strategy` 会复读 processed 文件核对 decisions 数 == 缺口数 —— 正是它抓到了那次覆盖。
 
-### 3.5 data/output/* 必须留在 .gitignore
+### 3.5 数据产物目录必须留在 .gitignore
 
-`data/output/*` 与顶级 `output/*` 是**两个不同的**路径，早期只忽略了后者，导致 CSV/DB/字典会被
-误提交。现在 raw / parsed / validated / processed / output 五个 data 子目录都有条目，
-靠 `!data/**/.gitkeep` 保留目录（**外加 `dist/` 与 `.exporter-selftest/`**）。
+`data/output/*` 与顶级 `output/*` 曾经是**两个不同的**路径，早期只忽略了后者，
+导致 CSV/DB/字典会被误提交。现在 raw / parsed / validated / processed / output 五个 data 子目录
+都有条目，靠 `!data/**/.gitkeep` 保留目录（**外加 `dist/` 与 `.exporter-selftest/`**）。
+
+**顶级 `output/` 已在开源整理时删除** —— 全仓库没有任何代码往那里写（`export.py` 与 `report.py`
+用的都是 `data/output/`），它只是个会让人困惑的空目录。删掉的是历史包袱，不是功能。
 
 ### 3.6 venv 依赖（重建环境时必看）
 
@@ -764,13 +767,17 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
   `validated/{spliced,arbiter,credibility,cross_check}/` + `missing_report.json` · `processed/` ·
   `output/`（csv / db / 字典 / **report.html** / last_gate.json）· 探测取证物
   `raw/_probe_pwt_maddison/` 与 `raw/_probe_catalog/`（`verified.json` / `diag_*.json` 等）
-- **项目根**：`package.json`（`type: module`，使 .mjs/.js 插件按 ESM 加载，**不要删**）·
+- **项目根**：`README.md`（中文，面向使用者）· `README.en.md`（英文）· `requirements.txt`
+  （PyYAML + Jinja2；pandas/pyarrow 可选）· `.gitattributes`（统一 LF，`*.bat` 除外）·
+  `.github/workflows/ci.yml`（**只跑纯离线子集** —— 完整门禁要打网络，放 CI 会因上游抖动常红）·
+  `package.json`（`type: module`，使 .mjs/.js 插件按 ESM 加载，**不要删**）·
   `PACKAGING.md`（打包/分发）· `LICENSE`（MIT + 数据许可说明）· `pip_sandbox_install.py` ·
-  `.gitignore`（忽略 .venv/.tools/node_modules、data 下五个子目录、`dist/`、`.exporter-selftest/`）
+  `.gitignore`（忽略 .venv/.tools/node_modules、data 下五个子目录、`dist/`、`.exporter-selftest/`、`.dsh/`）
 - **`dist/`（不进 git，只打 zip）**：`edh.bat`（**纯 ASCII**；设 PYTHONPATH /
-  ECON_HTTP_ALLOW_NON_VENV / chcp 65001，§2.15）· `embedded-python/`（3.12.7 + PyYAML 6.0.3）·
-  `python/econ_core/` · `tools/edh.py` · `examples/` · `README.md`（非技术用户）· `LICENSE` ·
-  `econ-data-harvester-v0.2.zip`（12.5 MB）。**`.build/` 与 `.tmp/` 是脚手架，不进 zip**
+  ECON_HTTP_ALLOW_NON_VENV / chcp 65001；另把 `edh.bat pip ...` 透传给内嵌 pip，§2.15）·
+  `embedded-python/`（3.12.7 + PyYAML 6.0.3 + **pip 26.2.1**）·
+  `python/econ_core/` · `tools/edh.py` · `examples/`（5 个文件）· `README.md`（非技术用户）·
+  `LICENSE` · `econ-data-harvester-v0.2.zip`（13.7 MB）。**`.build/` 与 `.tmp/` 是脚手架，不进 zip**
 
 ---
 
