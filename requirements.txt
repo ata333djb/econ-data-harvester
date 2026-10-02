@@ -1,31 +1,37 @@
-# Runtime dependencies of EconDataHarvester.
+# Dependencies of EconDataHarvester.
 #
 #   Python 3.12 or newer is REQUIRED (not merely recommended).
 #
 #   The code uses PEP 701 f-strings -- nested same-type quotes inside an
 #   f-string expression, e.g. f"{'yes' if x else 'no'}" written with double
 #   quotes throughout. That is a syntax error before 3.12. tools/report.py
-#   has a live example. This was caught by CI, which is why the version is
+#   has a live example. This was caught by CI, which is why the floor is
 #   stated explicitly rather than left to chance.
 #
 #   pip install -r requirements.txt
 #
-# The dependency list itself is deliberately tiny. The HTTP layer is built on
-# the Python standard library only (urllib + ssl) -- there is no
-# requests/httpx dependency anywhere. See docs/ENGINEERING_NOTES.md section 2.1
-# for why the project insists on its own OpenSSL stack rather than the
-# platform TLS provider.
+# The HTTP layer is built on the Python standard library only (urllib + ssl).
+# There is no requests/httpx dependency anywhere -- see
+# docs/ENGINEERING_NOTES.md section 2.1 for why the project insists on its own
+# OpenSSL stack rather than the platform TLS provider.
 
-# Required: the human-curated knowledge base (source_profiles.yaml) and the
-# indicator catalog (catalog_data.yaml) are YAML. Loading them is not optional.
+# --- Needed to use the tool ------------------------------------------------ #
+
+# The human-curated knowledge base (source_profiles.yaml) and the indicator
+# catalog (catalog_data.yaml) are YAML. Loading them is not optional.
 PyYAML>=6.0
 
-# Required for the HTML report (tools/report.py). The report is a single
-# self-contained file with all CSS/JS inlined.
+# The HTML report (tools/report.py) is a single self-contained file with all
+# CSS/JS inlined, built from a Jinja2 template.
 Jinja2>=3.1
 
-# Optional: only needed for the Parquet side-output
-# (normalize.write_validated_parquet). JSON is the canonical on-disk format and
-# everything in tools/ works without these.
-# pandas>=2.0
-# pyarrow>=14.0
+# --- Needed to run the self-tests, not to use the tool --------------------- #
+
+# `python -m econ_core.normalize --test` (gate check 10) exercises the Parquet
+# writer, so these must be present for tools/run-all-checks.py to reach 30/30.
+#
+# They are NOT needed for the normal data pipeline: JSON is the canonical
+# on-disk format for every layer, and every tool in tools/ works without them.
+# Only normalize.write_validated_parquet touches these.
+pandas>=2.0
+pyarrow>=14.0
