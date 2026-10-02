@@ -2,7 +2,7 @@
 
 **把中国宏观数据从五个官方源取回来，并且证明它没被取错。**
 
-[English](README.en.md) · MIT · Python 3.11+
+[English](README.en.md) · MIT · Python 3.12+
 
 ---
 

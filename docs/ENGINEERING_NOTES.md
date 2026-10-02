@@ -183,37 +183,43 @@ argparse / 渲染 / 退出码）；④ 第 27/28 项（`fetcher` 是"目录配�
 ### 1.5 更早几轮（压缩存档）
 
 - **方向 F（打包分发）**：内嵌 Python embeddable（不是 PyInstaller）+ `dist/` + `edh.bat`
-  + 非技术用户 README + `tools/{analyze-deps,download,make-dist-zip}.py` + MIT LICENSE；
-  门禁 26 -> 28。干净环境 7 步全过。三个"只有真解压跑一遍才暴露"的坑见 §3.19
+  + 非技术用户 README + 三个构建脚本 + MIT LICENSE；门禁 26 -> 28。干净环境 7 步全过，
+  三个"只有真解压跑一遍才暴露"的坑见 §3.19
 - **方向 E 第二轮（`edh fetch`）**：`fetcher.py` 取数适配层 + `edh.py fetch`（CSV 到 stdout /
   简报到 stderr / `--cross-check`）+ 门禁 26 -> 28。修 3 个输出层 bug，坑见 §3.18。
   **交叉验证的立场**：**不替用户做单位换算** —— unit 不同就判「口径不同」并把绝对差标
   "仅供参考"；CPI 四源 6 对里只有 World Bank vs BIS 真可比（同为 2010=100）
-- **方向 E 第一轮（指标目录）**：`catalog_data.yaml`（18 指标 / 51 源映射）+ `catalog.py`
-  + `tools/edh.py`（`list`/`info`/`summary`）+ `_probes/probe_catalog_sources.py`（8 阶段取证）；
-  门禁 24 -> 26。51 条映射**逐条真跑过取数**，另 3 条"探过、确认对中国取不到数据"留痕未收录。
-  坑见 §3.15-3.17
-- **方向 C 第五轮（rebase）**：`splicer.rebase()` 的 `ratio`/`difference` + `splice(rebase=...)`；
-  自检 46 -> 58。**关键结论：rebase 只调水平不调斜率，对当前 CPI 用例无效**（触发「需桥接」的是
-  `trend_break` 而非 `level_jump`；且 NBS 完全落在 BIS 跨度内 -> `applied=False`，故三模式
-  verdict 相同**不构成**"rebase 无效"的证据）。当轮修 5 个 bug（§5.4 留两条）- **方向 C 第四轮**：修 `http_client` 大小写缺陷（§3.13，顺带修掉一处 `KeyError`）；BIS 两条接进
+- **方向 E 第一轮（指标目录）**：`catalog_data.yaml`（18 指标 / 51 源映射）+ `catalog.py` +
+  `edh.py list/info/summary` + `probe_catalog_sources.py`（8 阶段取证）；门禁 24 -> 26。
+  51 条映射**逐条真跑过取数**，另 3 条"探过、确认对中国取不到数据"留痕未收录。坑见 §3.15-3.17
+- **方向 C 第五轮（rebase）**：`splicer.rebase()` 的 `ratio`/`difference`；自检 46 -> 58。
+  **关键结论：rebase 只调水平不调斜率，对当前 CPI 用例无效**（触发「需桥接」的是 `trend_break`
+  而非 `level_jump`；且 NBS 完全落在 BIS 跨度内 -> `applied=False`，故三模式 verdict 相同
+  **不构成**"rebase 无效"的证据）。当轮修 5 个 bug（§5.4 留两条）
+- **方向 C 第四轮**：修 `http_client` 大小写缺陷（§3.13，顺带修掉一处 `KeyError`）；BIS 两条接进
   声明式清单打通 validated -> processed -> 导出（152 -> **900 行**）；新增 `splicer.py` +
   `tools/splice-cpi.py`（首次真实拼接 30 期 / 拼接点 2015）；修掉落盘扫描**去重从来没生效**的
   静默 bug（§3.14）。门禁 22 -> 24
 - **方向 C 第三轮**：四源独立性探测固化（§3.10/3.11/3.12）；新增 `bis_client.py` + CLI + adapter +
-  smoke + 知识库 BIS 条目（自检 14/14）；门禁 21 -> 22；修 `verify-preset.mjs` 的 default 断言
-  （容错内置 preset `standard`，它**不在门禁里，要手工跑**）
+  smoke + 知识库 BIS 条目（自检 14/14）；门禁 21 -> 22
 - **更早**：`arbiter._adapt` 改成**数据驱动**（读产物自带的 `series_a`/`series_b`/`measured`，
   不再按键名猜形状），5 个对比脚本输出都补了这三个字段
+
 ## 2. 关键约定（未来必须遵守）
 
 ### 2.1 运行环境（用项目 venv，不要用 PATH 里的 python）
 
+- **Python 版本下限是 3.12，不是"建议"** —— 代码用了 PEP 701 f-string（表达式里嵌同类引号，
+  如 `f"{'有' if x else '无'}"` 写成双引号），**3.11 及以前直接是语法错误**（`tools/report.py`
+  就有一处）。这个下限是 CI 抓出来的：矩阵一开始写 `["3.11","3.12"]`，3.11 那一腿**连
+  byte-compile 都过不去** —— 在那之前 README 一直写着"3.11+"，是错的
 - **解释器**：`<项目根>/.venv/Scripts/python.exe`（Windows；Linux/macOS 为 `.venv/bin/python`）
 - **工作目录（cwd）**：项目根（即本文件所在目录）
 - **PYTHONPATH**：`<项目根>/python`（让 `econ_core.*` 可解析）
 - **PYTHONIOENCODING**：utf-8（否则 Windows 控制台会乱码）
-- **为什么必须用 venv**：开发机上 Schannel 凭证库不可用，非 OpenSSL 栈会 TLS 失败；`http_client.assert_venv()` 会强制拦截
+- **为什么必须用 venv**：开发机上 Schannel 凭证库不可用，非 OpenSSL 栈会 TLS 失败；`http_client.assert_venv()` 会强制拦截。
+  **别的环境（Linux CI、用户分发包）没有这个前提**，靠 `ECON_HTTP_ALLOW_NON_VENV=1` 放行 ——
+  `dist/edh.bat` 与 `.github/workflows/ci.yml` 都设了它
 - Node 侧脚本用系统 node（tools/*.mjs 通过 shutil.which("node") 或直接 node 命令）
 - **境外源一律先试朴素 UA**：IMF（Akamai）与 FRED 都会拒 Chrome UA，只有 `python-urllib/3.12` 能通；已固化在 imf_client.IMF_HEADERS 与 fred_client.FRED_HEADERS
 
@@ -781,33 +787,25 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
 
 ---
 
-## 7. 新对话开场步骤
+## 7. 接手时怎么做
 
-接手时按顺序做这四件事，**做完只报告状态，不要动代码，等指令**：
-
-1. 读本文件 —— 建立全局认识
-2. `git log --oneline -20` —— 判断哪些改动已固化、哪些还挂在 working tree
-3. 跑门禁确认基线（期望 **30/30 PASS，exit 0**；若不足，先定位退化的那一项，不要叠加改动）：
+1. 读本文件建立全局认识，再 `git log --oneline -20` 判断哪些改动已固化
+2. 跑门禁确认基线 —— 期望 **30/30 PASS，exit 0**；不足时先定位退化的那一项，**不要叠加改动**：
 
        cd <项目根>
        .\.venv\Scripts\python.exe tools\run-all-checks.py
 
-   ⚠️ 门禁是**可重复**的：同一天连跑两次必须都是 30/30。做不到就意味着
-   "后置依赖"又出现了 —— 见 §3.20（`arbiter --test` 已因此从第 9 项移到第 16 项）。
+   ⚠️ 门禁是**可重复**的：同一天连跑两次必须都是 30/30。做不到就意味着"后置依赖"又出现了
+   —— 见 §3.20（`arbiter --test` 已因此从第 9 项移到第 16 项）
+3. 报状态（模板）：`门禁 30/30 PASS · working tree <git status --short> ·
+   数据 12 条声明式序列 / 920 行 / 10 缺失行 · 目录 18 指标 / 51 源映射`
 
-4. 报告状态（照抄此模板）：
-
-       门禁：30/30 PASS（exit 0）
-       working tree：<git status --short 的内容>
-       数据：12 条声明式序列（+ `edh export` 落盘的若干条）/ 920 行 / 10 缺失行（按行：series_start 5, discontinued 3, not_yet_published 2, true_gap 0）
-       目录：18 个指标 / 51 条源映射（3 条探过并确认不可用，未收录；57 处 kb_series_key 里 12 处对上知识库）
-
-**改动后的固定动作**：① 开工前自检（pwsh ACL 故障见 §3.7；yaml/Jinja2 见 §3.6；validated 为空先跑
-materialize-validated）；② 跑完整门禁确认仍 30/30（新增检查要同步加进 `CHECKS` 与 docstring 编号，
-**且要问清"它读的产物是谁写的、排在我前面吗"** §3.20）；③ 新增序列必须补 `source_profiles.yaml`
-条目（否则 profiler 抛 KeyError）；**③b 动 `catalog_data.yaml` 要跑 `probe_catalog_sources.py verify`
+**改动后的固定动作**：① 开工前自检（pwsh ACL 见 §3.7；yaml/Jinja2 见 §3.6；validated 为空先跑
+materialize-validated）；② 跑完整门禁确认仍 30/30，新增检查要同步改 `CHECKS` 与 docstring 编号，
+**且先问"它读的产物是谁写的、排在我前面吗"**（§3.20）；③ 新增序列必须补 `source_profiles.yaml`
+条目，否则 profiler 抛 KeyError；**动 `catalog_data.yaml` 要跑 `probe_catalog_sources.py verify`
 （§2.13），新增指标还要填 `kb_series_key`（§2.16，否则永远落不了盘）**；
-④ 改契约/分类/字段名要同步更新本文件第 2、3 节；⑤ **不要把 data/ 下的产物提交进 git**，
+④ 改契约/分类/字段名要同步更新本文件第 2、3 节；⑤ **不要把 data/ 产物提交进 git**，
 **不要删 raw 存档**（那是证据链）。
 
 ---

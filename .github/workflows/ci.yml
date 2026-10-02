@@ -21,7 +21,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        # 3.12 is the floor, not a preference: the code uses PEP 701 f-strings
+        # (nested same-type quotes inside an f-string expression), which is a
+        # syntax error on 3.11 and earlier. This matrix started as
+        # ["3.11", "3.12"] and the 3.11 leg failed to even byte-compile --
+        # which is how the real requirement was discovered.
+        python-version: ["3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +47,14 @@ jobs:
         env:
           PYTHONPATH: python
           PYTHONIOENCODING: utf-8
+          # The HTTP layer refuses to run on a "non-project-venv" interpreter,
+          # because on the original development machine only a Python carrying
+          # its own OpenSSL could reach the data sources (broken Windows
+          # Schannel credential store, see docs/ENGINEERING_NOTES.md 2.1).
+          # That reasoning does not transfer to a Linux CI runner, where the
+          # system OpenSSL is fine -- and there is no .venv here to detect.
+          # dist/edh.bat sets the same variable for the same reason.
+          ECON_HTTP_ALLOW_NON_VENV: "1"
         run: |
           python -m econ_core.normalize --test
           python -m econ_core.cross_validation --test
@@ -54,6 +67,7 @@ jobs:
         env:
           PYTHONPATH: python
           PYTHONIOENCODING: utf-8
+          ECON_HTTP_ALLOW_NON_VENV: "1"
         run: |
           python tools/edh.py list
           python tools/edh.py info CPI

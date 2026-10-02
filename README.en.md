@@ -2,7 +2,7 @@
 
 **Pull Chinese macroeconomic data from five official sources — and prove you didn't get it wrong.**
 
-[中文](README.md) · MIT · Python 3.11+
+[中文](README.md) · MIT · Python 3.12+
 
 ---
 
