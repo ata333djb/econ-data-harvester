@@ -1,6 +1,6 @@
 import gzip, re, json
 from pathlib import Path
-ROOT = Path(r"D:\universe\econ-data-harvester")
+ROOT = Path(__file__).resolve().parents[2]  # 项目根：从本文件位置推导，不写死机器路径
 CACHE = ROOT / "data" / "raw" / "_http_cache"
 p = CACHE / "0aa788b698ee8e07.bin"
 raw = p.read_bytes()

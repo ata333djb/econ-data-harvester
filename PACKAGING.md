@@ -20,13 +20,15 @@
 
 ```
 dist/
-  edh.bat                  启动器（纯 ASCII；设 PYTHONPATH / ECON_HTTP_ALLOW_NON_VENV / chcp 65001）
+  edh.bat                  启动器（纯 ASCII；设 PYTHONPATH / ECON_HTTP_ALLOW_NON_VENV / chcp 65001；
+                           另把 `edh.bat pip ...` 透传给内嵌 pip）
   README.md                面向非技术用户（149 行，UTF-8 带 BOM）
   LICENSE                  MIT + 数据许可说明
-  embedded-python/         Python 3.12.7 embeddable + Lib/site-packages/PyYAML 6.0.3（77 文件）
+  embedded-python/         Python 3.12.7 embeddable + Lib/site-packages/{PyYAML 6.0.3, pip 26.2.1}
   python/econ_core/        运行时包（不含 _probes / __pycache__）
   tools/edh.py             用户 CLI
-  examples/                report.html + econ_data.csv + data_dictionary.md
+  examples/                report.html + econ_data.csv + econ_data.db + data_dictionary.md
+                           + missing_report.json（5 个，与报告里"八、数据下载"对得上）
   .build/                  构建脚手架（不进 zip）
   .tmp/                    构建期临时目录（不进 zip）
 ```
@@ -43,7 +45,7 @@ dist/
 | 任务 | 状态 | 关键结果 |
 |---|---|---|
 | A 依赖分析 | ✅ 完成 | 第三方包**只有 2 个**：PyYAML（必需）、pandas（可选） |
-| B 内嵌 Python | ✅ 完成（**pip 除外**，见 §4） | Python 3.12.7 完整；PyYAML 6.0.3 已可用 |
+| B 内嵌 Python | ✅ 完成 | Python 3.12.7 完整；PyYAML 6.0.3 + **pip 26.2.1** 均已可用（§4①） |
 | C `edh.bat` | ✅ 完成 | 纯 ASCII、非 ASCII 字节 = 0 |
 | D 目录结构 | ✅ 完成 | 见 §1；`dist/` 已 gitignore |
 | E 用户 README | ✅ 完成 | 149 行（上限 150），无代码/架构/门禁术语 |
@@ -90,7 +92,7 @@ tools/edh.py
 | **PyYAML** | **6.0.3 已可用**（实测 `import yaml` 通过，`safe_load` 正常） |
 | Jinja2 | **未装**（不需要，见 Task A） |
 | pandas | **未装**（不需要，见 Task A） |
-| pip | **未装**（见 §4） |
+| **pip** | **已装 26.2.1**（从 venv 复制，不走 get-pip.py）+ `edh.bat pip ...` 透传 —— §4① |
 
 **关于下载方式（重要）**：本机 `Invoke-WebRequest` / curl 等走 .NET-WinHTTP 的下载**一律 TLS 失败**
 （`基础连接已经关闭: 接收时发生错误`）。**必须**用 `tools/download.py`（走 venv 的 OpenSSL 栈）：
@@ -106,7 +108,7 @@ tools/edh.py
 改完任何 `.py` 之后**都要重打**，否则用户拿到的还是旧代码：
 
 ```powershell
-cd D:\universe\econ-data-harvester
+cd <项目根>
 $env:PYTHONIOENCODING="utf-8"
 
 # 1) 同步运行时代码进 dist/（改了 econ_core 或 edh.py 就要做）
@@ -146,40 +148,62 @@ Copy-Item ".venv\Lib\site-packages\pyyaml-6.0.3.dist-info" -Destination "dist\em
 
 ## 4. 已知缺口 / 下一步从哪继续
 
-### ① pip 没装进内嵌 Python（Task B 唯一未完成项）
+### ① pip 没装进内嵌 Python —— **已解决**（并纠正了此前一个错误诊断）
 
-- **现状**：`import pip` 在内嵌解释器里是 `ModuleNotFoundError`。功能不受影响（PyYAML 已可用），
-  但用户无法自行 `pip install` 别的包
-- **已试过、都失败的路径**：
-  - `get-pip.py`（经 `dist/.build/patched-run.py` 修补 tempfile）—— 跑 20 分钟无输出后手动停掉
-  - venv pip 的 `--target` 安装 —— 7 分钟超时
-  - `pip download pyyaml --timeout 15 --retries 1 -v` —— **180 秒无输出**
-- **已排除的原因**：
-  - 不是网络 —— `urllib` 直连 PyPI `/simple/pyyaml/` 是 **HTTP 200 / 3.5 秒**
-  - 不是 tempfile/沙箱 ACL —— 那部分已由 `pip_sandbox_install.py` 的 patch 处理
-  - 不是 pip 装不上 —— `import pip` 与 `pip --version` 都正常（pip **26.2.1**）
-- **结论**：卡在 pip 的 **HTTP 会话层**（不是启动、不是解析）。下一步该用
-  `pip -vvv` 把日志落到文件、看它停在哪个 socket/重定向；或用
-  `--index-url` 指向本地 wheel、或预先 `pip download` 好 wheel 再用
-  `--no-index --find-links` 离线装。**优先级低** —— 核心功能不依赖它
+**此前记的诊断是错的**：原文写着"卡在 pip 的 HTTP 会话层"。真相是**网络从来没出过问题**。
+错的根源是当时用 `-v`（单级）且把 stdout 接到 `Select-Object -Last N`，输出被**缓冲**到进程结束才显示，
+于是"什么都没打印"被误读成"卡住了"。换成 `-vvv` **落盘**后一眼就看出来了：
 
-### ② examples/ 与 report.html 的自述不完全对齐
+```
+https://pypi.org:443 "GET /simple/pyyaml/ HTTP/1.1" 200 64599          <- 索引页拿到了
+https://files.pythonhosted.org:443 "GET /packages/.../pyyaml-6.0.3-...  <- wheel 也下载了
+ERROR: Exception:
+PermissionError: [Errno 13] Permission denied: '...\Temp\dsh-XXXX\pip-unpack-xxxx'
+```
 
-`report.html` 的"八、数据下载"一节提到 `econ_data.db` 与 `missing_report.json`，
-但 `examples/` 里只放了 3 个文件（按任务规格）。**不是断链**（那节是纯文本提及），
-但用户可能去找。补进去约 +300 KB。**待定：要不要补**
+**真正的原因**：pip 下载完 wheel 后要**解包到临时目录**，而本沙箱把 `os.mkdir(path, 0o700)`
+当**禁止性 ACL**，`tempfile.mkdtemp()` 建出的目录连创建者都写不进（PROJECT_STATE §3.7）。
+pip 内部大量用 mkdtemp（`pip-unpack-*` / `pip-build-tracker-*`），所以**必然**在解包这一步炸。
+网络、DNS、证书、keyring **全部无辜** —— 三条都实测排除了。
 
-### ③ 打包工具没进门禁（刻意）
+**修法（已落地）**：
+
+1. **pip 直接随包分发** —— 从 venv 复制 `Lib/site-packages/pip` + `pip-26.2.1.dist-info`
+   到内嵌 Python（pip 是纯 Python，与 venv 同为 CPython 3.12 win_amd64，ABI 无关）。
+   **不走 `get-pip.py`** —— 那条路要联网下载再自举，多一次失败机会，而且它的临时目录同样会中招
+2. **`edh.bat` 加 `pip` 透传** —— `edh.bat pip install <包>` / `edh.bat pip list`，
+   用户不必知道解释器在哪（这正是这个包存在的意义）
+
+**验证**（三种环境都跑过）：
+
+| 环境 | 结果 |
+|---|---|
+| `dist/embedded-python/python.exe -m pip --version` | `pip 26.2.1` ✓ |
+| `edh.bat pip --version`（干净解压目录） | `pip 26.2.1` ✓ |
+| `edh.bat pip install six`（干净解压目录，**full-access**） | `Successfully installed six-1.17.0` ✓ |
+| 同上但在 **workspace-write** 沙箱下 | `PermissionError`（预期 —— 就是上面那个 ACL） |
+
+**所以对真实用户是可用的**：`mkdir(0o700)` 被当禁止性 ACL 是**本沙箱的文件系统层行为**，
+普通 Windows 没有这一条。测试时装进去的 `six` 已 `pip uninstall` 掉，`dist/` 保持干净
+（site-packages 只有 `pip` / `yaml` / 两个 dist-info）。
+
+### ② examples/ 与 report.html 的自述 —— **已解决**
+
+`econ_data.db`（284 KB，`observations` 表 920 行）与 `missing_report.json`（11.7 KB，
+`n_series=15 / n_gaps=5`）已补进 `dist/examples/`，现在共 5 个文件，与 `report.html`
+"八、数据下载"一节提到的对得上。
+
+### ③ 打包工具没进门禁（刻意，未变）
 
 `analyze-deps.py` / `download.py` / `make-dist-zip.py` 是**手工跑的构建脚本**，
-没加进 `tools/run-all-checks.py`（门禁保持 28 项，一条没动）。
-理由：门禁是"改代码后的回归网"，而打包是**发版动作**，频率不同。
+没加进 `tools/run-all-checks.py`。理由：门禁是"改代码后的回归网"，而打包是**发版动作**。
 若想让打包也受门禁保护，加一条"`make-dist-zip.py` 能跑通且自检通过"是合理的。
 
-### ④ LICENSE 主体署名待确认
+### ④ LICENSE 主体署名（保持现状）
 
-LICENSE 已按 **MIT** 落地，版权行写的是 `Copyright (c) 2026 EconDataHarvester contributors`
-——**没有**写具体自然人/组织名。要写实名请直接改 LICENSE 第一段（`dist/LICENSE` 也要同步）。
+LICENSE 按 **MIT** 落地，版权行是 `Copyright (c) 2026 EconDataHarvester contributors`
+—— 没写具体自然人/组织名。**本轮确认保持现状**（用户未给实名）。
+要写实名请直接改 LICENSE 第一段（`dist/LICENSE` 也要同步，然后重打 zip）。
 
 ---
 
@@ -192,6 +216,8 @@ LICENSE 已按 **MIT** 落地，版权行写的是 `Copyright (c) 2026 EconDataH
 | pandas | **不装** | 不在 edh 闭包上（Task A 已证 + 实测） |
 | Jinja2 | **不装** | 不在 edh 闭包上（`report.py` 不参与） |
 | PyYAML | **装**（从 venv 复制） | `catalog.load_catalog()` 必需 |
+| **pip** | **装 + `edh.bat pip` 透传** | 用户要能自己加包。**从 venv 复制而不是 `get-pip.py`** —— 后者要联网自举、临时目录还会撞沙箱 ACL（§4①） |
+| 诊断方法 | **`-vvv` 落盘，不要 `-v` 接管道** | 管道会缓冲到进程结束才显示，"没输出"曾被误读成"卡住"，导致一整个错误诊断（§4①） |
 | `ECON_HTTP_ALLOW_NON_VENV=1` | **在 edh.bat 里设** | 用户包无 `.venv`，该守卫会让 `fetch` 100% 失败；内嵌解释器自带 OpenSSL，实测 TLS 通（§PROJECT_STATE 3.19） |
 | `chcp 65001` | **在 edh.bat 里设 + 结束恢复** | 控制台默认 936(GBK) 而进程发 UTF-8，不切中文全花（实测 936→65001→936） |
 | zip 里含 `.py` 源码 | **是** | 分发形态决定"改代码 = 重打 zip"，不必重编 |
@@ -216,6 +242,11 @@ cmd /c ".\edh.bat fetch CPI --from 2020 --to 2024 --output test.csv"   # 期望 
 #    期望：BOM = EF BB BF，131 行（表头 1 + 数据 130），中文完整
 
 # 4) examples/report.html：外部 src= 资源应为 0（图表/样式全内联）
+
+# 5) 内嵌 pip 可用（用户在包内加包）
+.\edh.bat pip --version          # 期望 pip 26.2.1
+# 真装一个包须在**非沙箱**环境（本沙箱的 mkdtemp ACL 会让 pip 解包失败，§4①）
 ```
 
-**验收要点**：`.bat` 非 ASCII 字节 = 0；zip 条目全部正斜杠；码页前后都是 936。
+**验收要点**：`.bat` 非 ASCII 字节 = 0；zip 条目全部正斜杠；码页前后都是 936；
+`examples/` 有 5 个文件；内嵌 Python 的 site-packages 只有 `pip` 与 `yaml`（测试包要卸干净）。

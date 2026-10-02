@@ -35,7 +35,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-ROOT = Path(r"D:\universe\econ-data-harvester")
+ROOT = Path(__file__).resolve().parents[2]  # 项目根：从本文件位置推导，不写死机器路径
 sys.path.insert(0, str(ROOT / "python"))
 
 from econ_core import (  # noqa: E402

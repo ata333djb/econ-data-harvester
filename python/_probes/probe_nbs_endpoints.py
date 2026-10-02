@@ -8,7 +8,7 @@ Part 2 联网：测试 /publicrelease/web/external/* 端点。
 import gzip, hashlib, json, re, sys
 from pathlib import Path
 
-ROOT = Path(r"D:\universe\econ-data-harvester")
+ROOT = Path(__file__).resolve().parents[2]  # 项目根：从本文件位置推导，不写死机器路径
 sys.path.insert(0, str(ROOT / "python"))
 from econ_core.http_client import get_text, get_json, CACHE_DIR, cache_path_for
 

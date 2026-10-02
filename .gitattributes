@@ -1,0 +1,19 @@
+# Normalise line endings so the repo stays usable from Windows, macOS and Linux.
+#
+# The Python and JavaScript sources are plain text and should be stored with LF;
+# Git will check them out with the platform default. The HTML report and the
+# CSV/SQLite outputs are generated and gitignored, so they need no rules.
+#
+# *.bat is the exception: cmd.exe is happiest with CRLF, and dist/edh.bat is the
+# entry point handed to non-technical users, so it is pinned explicitly.
+* text=auto eol=lf
+
+*.bat text eol=crlf
+
+# Binary assets that must never be line-ending-mangled.
+*.png binary
+*.jpg binary
+*.ico binary
+*.zip binary
+*.db binary
+*.xlsx binary

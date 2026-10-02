@@ -78,7 +78,7 @@
 且需要把 `python/` 加入 `sys.path`（脚本内已自行引导）：
 
 ```powershell
-cd D:\universe\econ-data-harvester
+cd <项目根>
 .\.venv\Scripts\python.exe .\python\_probes\probe_payload_build.py      # 纯离线，读 raw 缓存
 .\.venv\Scripts\python.exe .\python\_probes\probe_after_fix.py          # 联网
 ```
@@ -241,7 +241,7 @@ cd D:\universe\econ-data-harvester
 **用法**（8 个阶段，可单跑）：
 
 ```powershell
-$env:PYTHONPATH="D:\universe\econ-data-harvester\python"
+$env:PYTHONPATH="<项目根>\python"
 .\.venv\Scripts\python.exe python\_probes\probe_catalog_sources.py nbs        # 拉三棵目录树
 .\.venv\Scripts\python.exe python\_probes\probe_catalog_sources.py nbs_targets # 18 指标候选三元组
 .\.venv\Scripts\python.exe python\_probes\probe_catalog_sources.py wb         # WB 全量目录 29544 条

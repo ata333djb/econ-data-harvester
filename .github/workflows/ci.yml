@@ -1,0 +1,72 @@
+name: offline checks
+
+# The full gate (tools/run-all-checks.py) needs network access: it really calls
+# NBS / World Bank / IMF / FRED / BIS and asserts on the responses. That makes it
+# unsuitable for CI -- it would fail on rate limits, upstream hiccups and
+# maintenance windows, and a red badge would stop meaning "you broke something".
+#
+# So CI runs the subset that is genuinely deterministic, plus the cheap static
+# checks. The authoritative gate is still run locally before release; see
+# docs/ENGINEERING_NOTES.md section 7.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Byte-compile every module
+        run: python -m compileall -q python tools
+
+      - name: Self-checks that need no network
+        env:
+          PYTHONPATH: python
+          PYTHONIOENCODING: utf-8
+        run: |
+          python -m econ_core.normalize --test
+          python -m econ_core.cross_validation --test
+          python -m econ_core.splicer --test
+          python -m econ_core.catalog --test
+          python -m econ_core.source_profiler --test
+          python -m econ_core.missing --test
+
+      - name: Indicator catalog loads and the CLI renders it
+        env:
+          PYTHONPATH: python
+          PYTHONIOENCODING: utf-8
+        run: |
+          python tools/edh.py list
+          python tools/edh.py info CPI
+
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Syntax-check the plugin shims
+        run: |
+          for f in src/plugins/*.js tools/*.mjs; do
+            node --check "$f"
+          done

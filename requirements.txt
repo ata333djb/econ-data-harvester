@@ -1,0 +1,22 @@
+# Runtime dependencies of EconDataHarvester.
+#
+#   pip install -r requirements.txt
+#
+# Deliberately tiny. The HTTP layer is built on the Python standard library
+# only (urllib + ssl) -- there is no requests/httpx dependency anywhere. See
+# docs/ENGINEERING_NOTES.md section 2.1 for why the project insists on its own
+# OpenSSL stack rather than the platform TLS provider.
+
+# Required: the human-curated knowledge base (source_profiles.yaml) and the
+# indicator catalog (catalog_data.yaml) are YAML. Loading them is not optional.
+PyYAML>=6.0
+
+# Required for the HTML report (tools/report.py). The report is a single
+# self-contained file with all CSS/JS inlined.
+Jinja2>=3.1
+
+# Optional: only needed for the Parquet side-output
+# (normalize.write_validated_parquet). JSON is the canonical on-disk format and
+# everything in tools/ works without these.
+# pandas>=2.0
+# pyarrow>=14.0

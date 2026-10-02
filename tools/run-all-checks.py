@@ -78,8 +78,11 @@ PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 #: 最近一次门禁结果的落盘位置（tools/report.py 的页脚读它）
 GATE_STATUS_PATH: Path = PROJECT_ROOT / "data" / "output" / "last_gate.json"
 
-#: 项目 venv 解释器（绝对路径，与插件/契约测试同一约定）
-PYTHON: str = r"D:\universe\econ-data-harvester\.venv\Scripts\python.exe"
+#: 项目 venv 解释器。**从 PROJECT_ROOT 推导，不写死机器上的绝对路径** ——
+#: 写死会让任何别的 clone 都跑不了门禁。venv 缺失时退回当前解释器并给出提示，
+#: 这样至少能跑，而不是直接抛 FileNotFoundError。
+_VENV_PYTHON: Path = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+PYTHON: str = str(_VENV_PYTHON if _VENV_PYTHON.exists() else Path(sys.executable))
 
 #: 让 `-m econ_core.*` 可解析
 PYTHONPATH: str = str(PROJECT_ROOT / "python")

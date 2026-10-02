@@ -1,3 +1,7 @@
+# ---------------------------------------------------------------------------
+# EconDataHarvester
+# ---------------------------------------------------------------------------
+
 # Virtual environment and the project-local Python toolchain that backs it
 .venv/
 .tools/
@@ -6,13 +10,16 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+*.bak
+*.bak-*
 
 # Node
 node_modules/
+node-compile-cache/
 
 # Harvest outputs: the directories are tracked, their contents are not.
-# Ignoring a directory's contents (rather than the directory) is what lets the
-# .gitkeep files below be re-included.
+# Ignoring a directory's CONTENTS (rather than the directory) is what lets the
+# .gitkeep files below be re-included and keeps the folder layout in the repo.
 data/raw/*
 data/parsed/*
 data/validated/*
@@ -22,27 +29,23 @@ output/*
 !data/**/.gitkeep
 !output/.gitkeep
 
-# DSH session state, if one is ever booted with this project as its home
-.dsh/sessions/
-.dsh/storages/
+# Packaging output: the distributable is a zip, not a tracked tree
+dist/
 
-# 杩藉姞锛氫复鏃剁洰褰曚笌缂撳瓨
+# Local scratch used by the exporter self-test. It deliberately writes to a
+# fixed workspace path instead of the system temp dir -- see
+# docs/ENGINEERING_NOTES.md section 3.7 for why.
+.exporter-selftest/
+
+# DSH agent-harness session state and presets.
+# The .dsh/ folder wires this project into the harness the original author used.
+# It hardcodes absolute paths to their machine and is meaningless elsewhere, so
+# it is deliberately NOT part of the public repository. tools/verify-preset.mjs
+# and the .dsh folder are optional extras -- see README "Optional: agent harness".
+.dsh/
+.dsh-scratch/
+
+# Misc scratch
 .pip-tmp/
 .tmp-pip/
 tmpgb9sfm6l/
-.dsh-scratch/
-
-# 澶囦唤鏂囦欢
-*.bak
-*.bak-*
-
-# Node 缂栬瘧缂撳瓨
-node-compile-cache/
-
-# Python 缂撳瓨
-__pycache__/
-*.pyc
-
-# 打包产物：只打 zip 分发，不进 git
-dist/
-.exporter-selftest/

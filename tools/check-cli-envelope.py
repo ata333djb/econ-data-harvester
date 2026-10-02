@@ -81,8 +81,10 @@ from typing import Any, NamedTuple, Optional
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 
-#: 硬编码项目 venv 解释器（不用 PATH 里的 python，与插件同约定）
-PYTHON: str = r"D:\universe\econ-data-harvester\.venv\Scripts\python.exe"
+#: 项目 venv 解释器。**从 PROJECT_ROOT 推导，不写死机器上的绝对路径**（写死别的 clone 就跑不了）。
+#: 仍不用 PATH 里的 python —— 约定没变，只是路径改成推导出来的。
+_VENV_PYTHON: Path = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+PYTHON: str = str(_VENV_PYTHON if _VENV_PYTHON.exists() else Path(sys.executable))
 
 #: 让 `-m econ_core.*` 可解析
 PYTHONPATH: str = str(PROJECT_ROOT / "python")

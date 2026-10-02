@@ -1,8 +1,22 @@
-# PROJECT_STATE.md —— EconDataHarvester 状态快照
+# EconDataHarvester —— 工程日志与决策记录
 
-- 生成时间：2026-09-27
-- 面向对象：**新对话的 Agent**。读完之后应当能直接继续工作，不需要回看任何历史对话。
-- 维护规则：每完成一轮实质改动就更新本文件。**只写状态**，不写历史对话，不粘贴代码，只给路径与一句话职责。
+> **这是什么**：不是教程，是**工程日志**。它记录「为什么这么做」—— 踩过的坑、被证伪的假设、
+> 刻意做的取舍，以及哪些结论是实测的、哪些只是推测。所有数字都是真跑出来的，附带证据路径。
+>
+> **写给谁**：想接手或审计这个项目的人，以及想知道「中国宏观数据从五个源取回来到底有多脏」的人。
+> **只想用工具的话，看根目录 `README.md` 就够了**，不需要读这份。
+>
+> **两个阅读提示**：
+> 1. 文中 `<项目根>` 指仓库根目录。
+> 2. 少数章节（尤其 §3.7）描述的是**原开发环境的沙箱**（一个带文件系统沙箱的 AI Agent harness）。
+>    普通机器不会遇到，保留它们是因为那些限制解释了 `pip_sandbox_install.py`、`exporter` 自检
+>    等处的绕行为什么存在 —— 删掉就会让后人以为那些代码是多余的。
+>
+> **这份文件本身就是个论据**：它被持续维护、设了行数上限、每次放宽都要写明理由。
+> 「一个项目愿不愿意记录自己错在哪」是判断它可信度的便宜信号。
+
+- 最后更新：2026-09-28
+- 维护规则：每完成一轮实质改动就更新。**只写状态**，不写对话历史，不粘贴代码，只给路径与一句话职责。
 - **篇幅上限：≤790 行**（2026-09-27 五调：原 500 -> 550 -> 600 -> 700 -> 720 -> 790）。
   **每次放宽都必须在这里写清"多出来的是哪个方向的哪一节"**，否则上限会一路变成没有上限：
   - 600 -> 700：方向 E 第一轮（指标目录），新增 §1.4 / §2.13 / §3.15-3.17 / §5.3① / §6 / §7
@@ -12,7 +26,7 @@
     这一轮新增的**全是"只有真跑一遍才会暴露"的坑**（§3.19），删掉就等于让下一个人
     重踩一遍 —— 正是本文件最不该省的那类内容
   本文件内容是坑 + 约定 + 教训，**删任何一条都会增加后人重踩的风险**，所以宁可放宽也不删条目。
-  设立上限的目的是「新 Agent 能一次读完」（790 行中文约 11000-14000 token），**不是为了压而压**。
+  设立上限的目的是「能一次读完」（790 行中文约 11000-14000 token），**不是为了压而压**。
 
 权威性顺序（冲突时以序号小的为准）：
 
@@ -193,13 +207,13 @@ argparse / 渲染 / 退出码）；④ 第 27/28 项（`fetcher` 是"目录配�
   不再按键名猜形状），5 个对比脚本输出都补了这三个字段
 ## 2. 关键约定（未来必须遵守）
 
-### 2.1 运行环境（硬编码，不要改成 PATH 里的 python）
+### 2.1 运行环境（用项目 venv，不要用 PATH 里的 python）
 
-- **解释器**：D:\universe\econ-data-harvester\.venv\Scripts\python.exe
-- **工作目录（cwd）**：D:\universe\econ-data-harvester（项目根）
-- **PYTHONPATH**：D:\universe\econ-data-harvester\python（让 econ_core.* 可解析）
+- **解释器**：`<项目根>/.venv/Scripts/python.exe`（Windows；Linux/macOS 为 `.venv/bin/python`）
+- **工作目录（cwd）**：项目根（即本文件所在目录）
+- **PYTHONPATH**：`<项目根>/python`（让 `econ_core.*` 可解析）
 - **PYTHONIOENCODING**：utf-8（否则 Windows 控制台会乱码）
-- **为什么必须用 venv**：本机 Schannel 凭证库不可用，非 OpenSSL 栈会 TLS 失败；http_client.assert_venv() 会强制拦截
+- **为什么必须用 venv**：开发机上 Schannel 凭证库不可用，非 OpenSSL 栈会 TLS 失败；`http_client.assert_venv()` 会强制拦截
 - Node 侧脚本用系统 node（tools/*.mjs 通过 shutil.which("node") 或直接 node 命令）
 - **境外源一律先试朴素 UA**：IMF（Akamai）与 FRED 都会拒 Chrome UA，只有 `python-urllib/3.12` 能通；已固化在 imf_client.IMF_HEADERS 与 fred_client.FRED_HEADERS
 
@@ -342,7 +356,8 @@ indicator_id 必须 != tree_node_id；**R11（关键）**：command 含 fetch �
 - **打包范围是白名单**，不是"dist/ 下所有东西"：`.build/`、`.tmp/`、`get-pip.py` 都是脚手架。
   `make-dist-zip.py` 有自检断言这件事
 - **zip 路径必须正斜杠**（APPNOTE 4.4.17.1）：`Compress-Archive` 写反斜杠，资源管理器容错所以本地看不出，但 Linux/macOS `unzip` 会把整条路径当成一个文件名（§3.19）
-- **`python/` 只带 `econ_core`**（不含 `_probes`/`__pycache__`）；`tools/` 只带 `edh.py`
+- **`python/` 只带 `econ_core`**（不含 `_probes`/`__pycache__`）；`tools/` 只带 `edh.py`；
+  **内嵌 site-packages 只应有 `pip` 与 `yaml`** —— 试装过测试包要 `pip uninstall` 干净，否则会被打进 zip
 - **改完代码要重打 zip**：`tools\make-dist-zip.py`（分发的是 `.py` 源码，**必须重打**用户才拿到新版）
 
 ### 2.16 导出层（`exporter.py` / `kb_series_key`）的规矩
@@ -410,11 +425,15 @@ jinja2（HTML 报告必需）**；pandas + pyarrow（仅 `write_validated_parque
 **缺依赖时报错会直接给出安装命令，不会静默降级。**
 （**内嵌 Python 的依赖集是另一回事**，只有 PyYAML —— 见 `PACKAGING.md` §2 Task A）
 
-### 3.7 ⚠️ 本机沙箱 ACL runner 故障（环境问题，不是策略拒绝）
+### 3.7 ⚠️ 开发环境的沙箱 ACL 故障（环境问题，不是代码缺陷）
 
-- 现象：workspace-write 下 pwsh 可能直接失败，报 `Runner failure: windows-acl-run: --temp is not
-  an existing directory: C:\Users\user\AppData\Local\Temp\dsh-<随机后缀>`
-- 含义：ACL 受限令牌 runner 起不来（临时目录不存在）。涉及 `Temp\dsh-*`（每命令一个随机目录，重建单个没用）
+> **这一节描述的是原开发环境**（一个带文件系统沙箱的 AI Agent harness，DSH）。
+> 保留它是因为它解释了 `pip_sandbox_install.py` 与 `exporter` 自检**为什么长成那样** ——
+> 去掉这段，后人会以为那些绕行是多余的。**普通机器上不会遇到**。
+
+- 现象：受限写模式下 pwsh 可能直接失败，报 `Runner failure: windows-acl-run: --temp is not
+  an existing directory: <TEMP>\dsh-<随机后缀>`
+- 含义：ACL 受限令牌 runner 起不来（临时目录不存在）。涉及 `<TEMP>\dsh-*`（每命令一个随机目录）
 - 处置：**先试普通模式；失败即带 `sandbox_permissions=danger-full-access` + justification 重试一次**；一次被拒即终局，不绕路
 - 读文件类工具（read/edit/write）**不受影响**，只有 pwsh 子进程受影响
 - 写 workspace 之外的文件要 danger-full-access 审批；审批无人应答会挂到墙钟上限（实测约 10 分钟）才失败，且**不会部分生效**
@@ -682,10 +701,9 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
   要不要做成 `edh export --refresh --full` 值得讨论
 - **② 多指标批量 export 的收尾（中）** —— `edh export GDP CPI M2` 已经能用，但每写一个序列就重判
   一次整份 validated 的覆盖保护，指标多了会慢；且没有"这次导出改了哪几条"的汇总
-- **③ 分发包收尾（中）** —— 打包（方向 F）已结项、zip 已验证可用，只剩 4 件小事，
-  **清单在 `PACKAGING.md` §4，本文件不重复维护**。要点：pip 没装进内嵌 Python（低优先级，
-  核心功能不依赖）；`examples/` 与 `report.html` 自述差 2 个文件；LICENSE 署名待实名；
-  打包工具刻意没进门禁
+- **③ 分发包收尾（低）** —— 打包（方向 F）已结项；上轮又做掉两件：**pip 已随包分发 +
+  `edh.bat pip ...` 透传**、`examples/` 补到 5 个文件。**清单在 `PACKAGING.md` §4**。仅剩：
+  LICENSE 署名待实名、打包工具刻意没进门禁
 - **④ 拼接产物进 processed / 导出（中）** —— 现在只到 `data/validated/spliced/`。要进导出链路，
   得先让 `fill_strategy` 认识拼接产物（它现在只认 `rows` 长表）
 - **⑤ `RELATIVE_METRIC_FLOOR` 按量纲配置（低）** —— 见 §5.4，0.5 只适配百分点量纲
@@ -764,7 +782,7 @@ NBS 对**没有发布的期**会回**占位行**：`dt_name` 有值（"2024年1�
 2. `git log --oneline -20` —— 判断哪些改动已固化、哪些还挂在 working tree
 3. 跑门禁确认基线（期望 **30/30 PASS，exit 0**；若不足，先定位退化的那一项，不要叠加改动）：
 
-       cd D:\universe\econ-data-harvester
+       cd <项目根>
        .\.venv\Scripts\python.exe tools\run-all-checks.py
 
    ⚠️ 门禁是**可重复**的：同一天连跑两次必须都是 30/30。做不到就意味着
